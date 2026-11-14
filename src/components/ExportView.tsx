@@ -82,7 +82,7 @@ export const ExportView: React.FC<ExportViewProps> = ({
     {
       id: 'morsettiera',
       titolo: 'Schema Morsettiera',
-      descrizione: 'Morsettiera X1 numerata (CBD), collegamenti quadro/campo e morsetti segnali.',
+      descrizione: 'Tabella MORSETTO (N./TIPO CBD), conduttori lato quadro, doppia barra cavo || e bandiere F0/utenze.',
       suffisso: 'Schema_Morsettiera',
     },
     {

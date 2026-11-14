@@ -10,7 +10,6 @@ import {
 // 1 colonna montante generale (Q.GEN / QS0) + fino a 6 linee in partenza per tavola A3
 export const LINEE_PER_TAVOLA = 6;
 const CAVI_PER_TAVOLA = 6;
-const MORSETTI_PER_TAVOLA = 7;
 
 export function parseDxfTemplate(
   fileName: string,
@@ -1795,7 +1794,7 @@ export function generaDxfFronteQuadro(
 }
 
 // ============================================================================
-// 4. SCHEMA MORSETTIERA DXF (Morsettiera X1 + Collegamenti Lato Quadro / Campo)
+// 4. SCHEMA MORSETTIERA DXF (Tabella MORSETTO N./TIPO, || cavo e bandiere)
 // ============================================================================
 export function generaDxfMorsettiera(
   progetto: ProgettoAntincendio,
@@ -1808,10 +1807,155 @@ export function generaDxfMorsettiera(
     template.orientamento === 'orizzontale' ? Math.max(template.altezzaMm, 297) : 420;
   const quadro = progetto.quadri[0];
   const linee = progetto.linee;
-  const numTavole = Math.max(1, Math.ceil(linee.length / MORSETTI_PER_TAVOLA));
+
+  interface MorsettoRowSpec {
+    numLabel: string;
+    tipoLabel: string;
+    wireLabel: string;
+    isEarth?: boolean;
+  }
+
+  interface MorsettieraGroup {
+    isIncoming: boolean;
+    tagLabel: string;
+    descrizione: string;
+    cavoTesto: string;
+    rows: MorsettoRowSpec[];
+  }
+
+  const getCbdType = (sezMm2: number): string => {
+    if (sezMm2 <= 4) return 'CBD.4';
+    if (sezMm2 <= 6) return 'CBD.6';
+    if (sezMm2 <= 10) return 'CBD.10';
+    return 'CBD.16';
+  };
+
+  let nextTermNum = 1;
+  let nextAuxNum = 1;
+  const groups: MorsettieraGroup[] = [];
+
+  // 1) Gruppo in ingresso: Alimentazione da Quadro Fornitura (F 0)
+  const isQuadroTrifase = quadro?.tipoFornitura === 'trifase';
+  const feederSez =
+    (quadro?.interruttoreGeneraleInA ?? 40) >= 63
+      ? 16
+      : (quadro?.interruttoreGeneraleInA ?? 40) >= 32
+      ? 10
+      : 6;
+  const feederCbd = getCbdType(feederSez);
+  const feederPoles = isQuadroTrifase ? ['L1', 'L2', 'L3', 'N'] : ['L1', 'N'];
+  groups.push({
+    isIncoming: true,
+    tagLabel: 'F 0',
+    descrizione: `Da Quadro Fornitura${quadro?.alimentazionePreferenzialeAMonte ? ' (Preferenziale a monte I.G.)' : ''}`,
+    cavoTesto: isQuadroTrifase
+      ? `FTG18OM16 4(1x${feederSez})`
+      : `FTG18OM16 2(1x${feederSez})`,
+    rows: feederPoles.map((p) => ({
+      numLabel: String(nextTermNum++),
+      tipoLabel: feederCbd,
+      wireLabel: p,
+    })),
+  });
+
+  // 2) Gruppi in partenza per ogni linea del quadro
+  linee.forEach((linea) => {
+    const res = calcolo.linee[linea.id];
+    const sez = res?.sezioneSceltaMm2 ?? linea.sezioneManualeMm2 ?? 2.5;
+    const cbd = getCbdType(sez);
+    const cavoPrefisso =
+      linea.resistenzaFuocoCavoScelto !== 'nessuna' ? 'FTG18OM16' : 'FG16OM16';
+    const sezStr = String(sez).replace('.', ',');
+    const cavoFormazione =
+      linea.tipoFornitura === 'trifase'
+        ? `${cavoPrefisso} 3(1x${sezStr})+(1N${sezStr})+(1PE${sezStr})`
+        : `${cavoPrefisso} 2(1x${sezStr})+(1PE${sezStr})`;
+
+    const phasePoles =
+      linea.tipoFornitura === 'trifase'
+        ? [`L1.${linea.sigla}`, `L2.${linea.sigla}`, `L3.${linea.sigla}`, `N.${linea.sigla}`]
+        : [`L1.${linea.sigla}`, `N.${linea.sigla}`];
+
+    const rows: MorsettoRowSpec[] = phasePoles.map((wl) => ({
+      numLabel: String(nextTermNum++),
+      tipoLabel: cbd,
+      wireLabel: wl,
+    }));
+    rows.push({
+      numLabel: 'T',
+      tipoLabel: cbd,
+      wireLabel: '',
+      isEarth: true,
+    });
+
+    groups.push({
+      isIncoming: false,
+      tagLabel: linea.sigla,
+      descrizione: linea.descrizione.toUpperCase(),
+      cavoTesto: cavoFormazione,
+      rows,
+    });
+  });
+
+  // 3) Gruppi segnali ausiliari X2 per linee con contatti attivi
+  linee.forEach((linea) => {
+    const segnaliAttivi = [
+      linea.segnali.allarme ? 'ALLARME' : null,
+      linea.segnali.guasto ? 'GUASTO' : null,
+      linea.segnali.marcia ? 'MARCIA' : null,
+      linea.segnali.mancanzaRete ? 'MANC.RETE' : null,
+      linea.segnali.comandiRemoti ? 'COMANDI' : null,
+    ].filter((s): s is string => Boolean(s));
+
+    if (segnaliAttivi.length > 0) {
+      groups.push({
+        isIncoming: false,
+        tagLabel: `${linea.sigla}-X2`,
+        descrizione: `SEGNALI AUSILIARI ${linea.sigla}: ${segnaliAttivi.join(', ')}`,
+        cavoTesto: `FTG18OM16 ${segnaliAttivi.length * 2}x1,5`,
+        rows: [
+          {
+            numLabel: `A${nextAuxNum++}`,
+            tipoLabel: 'CBD.4',
+            wireLabel: `AUX.${linea.sigla}+`,
+          },
+          {
+            numLabel: `A${nextAuxNum++}`,
+            tipoLabel: 'CBD.4',
+            wireLabel: `AUX.${linea.sigla}-`,
+          },
+        ],
+      });
+    }
+  });
+
+  // Impaginazione per gruppi interi (max 26 righe morsetto per tavola A3)
+  const MAX_ROWS_PER_SHEET = 26;
+  const pages: MorsettieraGroup[][] = [];
+  let currentPage: MorsettieraGroup[] = [];
+  let currentRowCount = 0;
+
+  groups.forEach((grp) => {
+    if (currentPage.length > 0 && currentRowCount + grp.rows.length > MAX_ROWS_PER_SHEET) {
+      pages.push(currentPage);
+      currentPage = [grp];
+      currentRowCount = grp.rows.length;
+    } else {
+      currentPage.push(grp);
+      currentRowCount += grp.rows.length;
+    }
+  });
+  if (currentPage.length > 0) {
+    pages.push(currentPage);
+  }
+  if (pages.length === 0) {
+    pages.push([]);
+  }
+
+  const numTavole = pages.length;
   const entities: string[] = [];
 
-  for (let sheetIdx = 0; sheetIdx < numTavole; sheetIdx++) {
+  pages.forEach((pageGroups, sheetIdx) => {
     const ox = sheetIdx * (sheetW + 30);
     const oy = 0;
     const geom = renderDxfTemplateFrame(entities, ox, oy, sheetW, sheetH);
@@ -1823,156 +1967,161 @@ export function generaDxfMorsettiera(
       template,
       sheetIdx,
       numTavole,
-      `Schema Morsettiera X1 — ${quadro?.sigla ?? 'Q.ANT-01'}`
+      `Schema Morsettiera — ${quadro?.sigla ?? 'Q.ANT-01'}`
     );
     const bodyTopY = renderDocumentTopHeader(
       entities,
       geom,
       progetto,
-      `SCHEMA MORSETTIERA X1 — ${quadro?.sigla ?? 'Q.ANT-01'}`,
+      `SCHEMA MORSETTIERA — ${quadro?.sigla ?? 'Q.ANT-01'}`,
       'SYM_HDR_MORSETTI'
     );
 
-    const tblTop = bodyTopY - 1;
-    const hdrH = 12;
-    const hdrBot = tblTop - hdrH;
-    const rowH = 29;
-    const tblBot = footerTopY + 2;
+    const usableTop = bodyTopY - 6;
+    const usableBot = footerTopY + 5;
+    const headerH = 13;
+    const rowH = 6.5;
 
-    const wLatoInt = 112;
-    const wMors = 108;
-    const wLatoEst = geom.innerW - wLatoInt - wMors;
+    // Coordinate orizzontali del blocco morsettiera
+    const xWireStart = geom.innerX + 10;
+    const xTblLeft = geom.innerX + 54;
+    const wNumCol = 15;
+    const wTipoCol = 30;
+    const xTblMid = xTblLeft + wNumCol;
+    const xTblRight = xTblMid + wTipoCol;
+    const xBar1 = xTblRight + 16;
+    const xBar2 = xBar1 + 2.2;
+    const xFlagStart = geom.innerR - 54;
+    const xFlagEnd = geom.innerR - 8;
 
-    const xInt = geom.innerX;
-    const xMors = xInt + wLatoInt;
-    const xEst = xMors + wMors;
+    // Intestazione tabella MORSETTO (N. | TIPO)
+    const hdrTop = usableTop;
+    const hdrMid = hdrTop - headerH / 2;
+    const hdrBot = hdrTop - headerH;
 
-    entities.push(dxfRect('TABELLE', geom.innerX, hdrBot, geom.innerW, hdrH, 7));
-    entities.push(dxfLine('TABELLE', xMors, hdrBot, xMors, tblTop, 7));
-    entities.push(dxfLine('TABELLE', xEst, hdrBot, xEst, tblTop, 7));
-
+    entities.push(dxfRect('TABELLE', xTblLeft, hdrBot, wNumCol + wTipoCol, headerH, 7));
+    entities.push(dxfLine('TABELLE', xTblLeft, hdrMid, xTblRight, hdrMid, 7));
+    entities.push(dxfLine('TABELLE', xTblMid, hdrBot, xTblMid, hdrMid, 7));
     entities.push(
-      dxfText('TESTI', xInt + wLatoInt / 2, hdrBot + hdrH / 2, 2.2, 'LATO INTERNO QUADRO (Apparecchio / Filo)', 7, 'center'),
-      dxfText('TESTI', xMors + wMors / 2, hdrBot + hdrH / 2, 2.2, 'MORSETTIERA X1 (Morsetti Potenza & PE)', 7, 'center'),
-      dxfText('TESTI', xEst + wLatoEst / 2, hdrBot + hdrH / 2, 2.2, 'LATO ESTERNO CAMPO (Cavo / Utenza / Segnali)', 7, 'center')
+      dxfText('TESTI', xTblLeft + (wNumCol + wTipoCol) / 2, (hdrTop + hdrMid) / 2, 2.1, 'MORSETTO', 7, 'center'),
+      dxfText('TESTI', xTblLeft + wNumCol / 2, (hdrMid + hdrBot) / 2, 1.9, 'N.', 7, 'center'),
+      dxfText('TESTI', xTblMid + wTipoCol / 2, (hdrMid + hdrBot) / 2, 1.9, 'TIPO', 7, 'center')
     );
 
-    const slice = linee.slice(
-      sheetIdx * MORSETTI_PER_TAVOLA,
-      (sheetIdx + 1) * MORSETTI_PER_TAVOLA
-    );
+    let cursorY = hdrBot;
 
-    slice.forEach((linea, idx) => {
-      const rTop = hdrBot - idx * rowH;
-      const rBot = rTop - rowH;
-      if (rBot < tblBot) return;
+    pageGroups.forEach((grp) => {
+      const nRows = grp.rows.length;
+      const grpTopY = cursorY;
+      const grpBotY = grpTopY - nRows * rowH;
+      if (grpBotY < usableBot - 1) return;
 
-      const globalIdx = sheetIdx * MORSETTI_PER_TAVOLA + idx;
-      const res = calcolo.linee[linea.id];
-      const sez = res?.sezioneSceltaMm2 ?? linea.sezioneManualeMm2 ?? 2.5;
-      const cbdType = sez >= 6 ? 'CBD.6' : 'CBD.4';
-      const poles =
-        linea.tipoFornitura === 'trifase'
-          ? ['L1', 'L2', 'L3', 'N', 'PE']
-          : ['L1', 'N', 'PE'];
+      const wireYs: number[] = [];
 
-      entities.push(dxfRect('TABELLE', geom.innerX, rBot, geom.innerW, rowH, 7));
-      entities.push(dxfLine('TABELLE', xMors, rBot, xMors, rTop, 7));
-      entities.push(dxfLine('TABELLE', xEst, rBot, xEst, rTop, 7));
+      grp.rows.forEach((row, rIdx) => {
+        const rTop = grpTopY - rIdx * rowH;
+        const rBot = rTop - rowH;
+        const rMid = (rTop + rBot) / 2;
+        wireYs.push(rMid);
 
-      // Lato interno quadro
-      entities.push(
-        dxfText('TESTI', xInt + 3, rTop - 5.5, 2.0, `Partenza ${linea.sigla} (da Q${globalIdx + 1})`, 7, 'left'),
-        dxfText('TESTI', xInt + 3, rTop - 11.5, 1.7, res?.siglaProtezioneCompleta ?? 'MTD', 8, 'left'),
-        dxfText(
-          'TESTI',
-          xInt + 3,
-          rBot + 5.0,
-          1.65,
-          `Cordicella N07V-K ${sez} mmq · ${linea.tipoFornitura === 'trifase' ? '3F+N+PE' : '1F+N+PE'}`,
-          7,
-          'left'
-        )
-      );
+        // Celle tabella morsetto N. | TIPO
+        entities.push(dxfRect('TABELLE', xTblLeft, rBot, wNumCol + wTipoCol, rowH, 7));
+        entities.push(dxfLine('TABELLE', xTblMid, rBot, xTblMid, rTop, 7));
+        entities.push(
+          dxfText('TESTI', xTblLeft + wNumCol / 2, rMid, 1.95, row.numLabel, row.isEarth ? 3 : 7, 'center'),
+          dxfText('TESTI', xTblMid + wTipoCol / 2, rMid, 1.85, row.tipoLabel, 7, 'center')
+        );
 
-      // Disegno morsetti singoli al centro
-      const stripW = poles.length * 16;
-      const stripX = xMors + (wMors - stripW) / 2;
-      const stripY = rBot + 6.5;
-      const cellW = 16;
-      const cellH = 14;
+        // Conduttore lato sinistro (interno quadro)
+        const wireCol = row.isEarth ? 3 : 7;
+        entities.push(dxfLine('LINEE', xWireStart, rMid, xTblLeft, rMid, wireCol));
+        if (row.wireLabel) {
+          entities.push(
+            dxfText('TESTI', xTblLeft - 2.5, rMid + 1.1, 1.8, row.wireLabel, 7, 'right')
+          );
+        }
 
-      entities.push(
-        dxfText(
-          'TESTI',
-          xMors + wMors / 2,
-          rTop - 4.0,
-          1.75,
-          `Morsettiera X1-${linea.sigla} (${cbdType})`,
-          7,
-          'center'
-        )
-      );
-
-      poles.forEach((pole, pIdx) => {
-        const mx = stripX + pIdx * cellW;
-        const mCenter = mx + cellW / 2;
-        const termNum =
-          pole === 'PE' ? 'T' : String(globalIdx * 4 + pIdx + 1);
-        const col = pole === 'PE' ? 3 : pole === 'N' ? 5 : 7;
-
-        entities.push(dxfRect('LINEE', mx, stripY, cellW, cellH, col));
-        entities.push(dxfCircle('LINEE', mCenter, stripY + cellH / 2, 2.0, col));
-        // Conduttore entrante (sx -> sopra) e uscente (sotto)
-        entities.push(dxfLine('LINEE', xInt + wLatoInt - 8, stripY + cellH + 2, mCenter, stripY + cellH, col));
-        entities.push(dxfLine('LINEE', mCenter, stripY, mCenter, stripY - 3.5, col));
-
-        entities.push(dxfText('TESTI', mCenter, stripY + cellH - 2.4, 1.45, pole, col, 'center'));
-        entities.push(dxfText('TESTI', mCenter, stripY + 2.2, 1.5, termNum, 7, 'center'));
+        // Conduttore lato destro fino alla barra doppia ||
+        entities.push(dxfLine('LINEE', xTblRight, rMid, xBar1, rMid, wireCol));
       });
 
-      // Lato esterno campo + segnali ausiliari antincendio
-      const segnaliAttivi = [
-        linea.segnali.allarme ? 'ALLARME' : null,
-        linea.segnali.guasto ? 'GUASTO' : null,
-        linea.segnali.marcia ? 'MARCIA' : null,
-        linea.segnali.mancanzaRete ? 'MANC.RETE' : null,
-        linea.segnali.comandiRemoti ? 'COMANDI' : null,
-      ].filter(Boolean);
+      // Doppia barra verticale di raggruppamento cavo ||
+      const firstWireY = wireYs[0];
+      const lastWireY = wireYs[wireYs.length - 1];
+      const cableMidY = (firstWireY + lastWireY) / 2;
 
+      entities.push(
+        dxfLine('LINEE', xBar1, lastWireY - 1.2, xBar1, firstWireY + 1.2, 7),
+        dxfLine('LINEE', xBar2, lastWireY - 1.2, xBar2, firstWireY + 1.2, 7)
+      );
+
+      // Linea singola del cavo fino alla bandiera a freccia
+      entities.push(dxfLine('LINEE', xBar2, cableMidY, xFlagStart, cableMidY, 7));
+
+      // Descrizione circuito sopra la linea cavo e formazione cavo sotto la linea cavo
       entities.push(
         dxfText(
           'TESTI',
-          xEst + 3,
-          rTop - 5.5,
-          1.9,
-          `Verso Utenza ${linea.sigla} — ${linea.descrizione.slice(0, 34)}`,
+          xBar2 + 4,
+          cableMidY + 2.3,
+          2.0,
+          grp.descrizione.slice(0, 62),
           7,
           'left'
         ),
         dxfText(
           'TESTI',
-          xEst + 3,
-          rTop - 11.5,
-          1.7,
-          `Cavo: ${res?.siglaCavoCompleta.slice(0, 44) ?? ''} · L=${linea.lunghezzaM} m`,
-          7,
-          'left'
-        ),
-        dxfText(
-          'TESTI',
-          xEst + 3,
-          rBot + 5.0,
-          1.6,
-          segnaliAttivi.length > 0
-            ? `Morsetti Segnali Ausiliari (X2-${linea.sigla}): ${segnaliAttivi.join(', ')}`
-            : `Nessun contatto ausiliario su X2-${linea.sigla}`,
-          segnaliAttivi.length > 0 ? 1 : 8,
+          xBar2 + 4,
+          cableMidY - 3.9,
+          1.85,
+          grp.cavoTesto.slice(0, 58),
+          8,
           'left'
         )
       );
+
+      // Bandiera / freccia terminale (entrante a sinistra per F 0, uscente a destra per partenze)
+      const halfFlagH = 4.2;
+      const tipLen = 6.5;
+      if (grp.isIncoming) {
+        entities.push(
+          dxfLine('LINEE', xFlagStart, cableMidY, xFlagStart + tipLen, cableMidY + halfFlagH, 7),
+          dxfLine('LINEE', xFlagStart + tipLen, cableMidY + halfFlagH, xFlagEnd, cableMidY + halfFlagH, 7),
+          dxfLine('LINEE', xFlagEnd, cableMidY + halfFlagH, xFlagEnd, cableMidY - halfFlagH, 7),
+          dxfLine('LINEE', xFlagEnd, cableMidY - halfFlagH, xFlagStart + tipLen, cableMidY - halfFlagH, 7),
+          dxfLine('LINEE', xFlagStart + tipLen, cableMidY - halfFlagH, xFlagStart, cableMidY, 7),
+          dxfText(
+            'TESTI',
+            (xFlagStart + tipLen + xFlagEnd) / 2,
+            cableMidY,
+            2.1,
+            grp.tagLabel.slice(0, 12),
+            7,
+            'center'
+          )
+        );
+      } else {
+        entities.push(
+          dxfLine('LINEE', xFlagStart, cableMidY - halfFlagH, xFlagEnd - tipLen, cableMidY - halfFlagH, 7),
+          dxfLine('LINEE', xFlagEnd - tipLen, cableMidY - halfFlagH, xFlagEnd, cableMidY, 7),
+          dxfLine('LINEE', xFlagEnd, cableMidY, xFlagEnd - tipLen, cableMidY + halfFlagH, 7),
+          dxfLine('LINEE', xFlagEnd - tipLen, cableMidY + halfFlagH, xFlagStart, cableMidY + halfFlagH, 7),
+          dxfLine('LINEE', xFlagStart, cableMidY + halfFlagH, xFlagStart, cableMidY - halfFlagH, 7),
+          dxfText(
+            'TESTI',
+            (xFlagStart + xFlagEnd - tipLen) / 2,
+            cableMidY,
+            2.1,
+            grp.tagLabel.slice(0, 12),
+            7,
+            'center'
+          )
+        );
+      }
+
+      cursorY = grpBotY;
     });
-  }
+  });
 
   return finalizeDxfString(numTavole, sheetW, sheetH, entities);
 }
