@@ -1,0 +1,6 @@
+{
+  "name": "ElettroCAD Fire Systems",
+  "description": "Applicazione di progettazione elettrica assistita per impianti antincendio IRAI, EVAC e alimentazioni di sicurezza con schemi unifilari, verifiche normative ed esportazione DXF/PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
