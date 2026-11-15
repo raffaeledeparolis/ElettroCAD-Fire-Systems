@@ -819,6 +819,22 @@ function getCommonBlocksSection(): string {
     dxfCircle('LINEE', 0, 0, 1.6, 5),
     dxfCircle('LINEE', 8, 0, 1.6, 3),
     '0', 'ENDBLK',
+
+    '0', 'BLOCK', '8', 'SIMBOLI_DM83', '2', 'SYM_HDR_BLOCCHI', '70', '0', '10', '0', '20', '0', '30', '0',
+    dxfRect('LINEE', -14, -6, 8, 12, 7),
+    dxfRect('SIMBOLI_DM83', -3, -6, 8, 12, 1),
+    dxfRect('LINEE', 8, -6, 8, 12, 5),
+    dxfLine('LINEE', -6, 0, -3, 0, 7),
+    dxfLine('LINEE', 5, 0, 8, 0, 7),
+    '0', 'ENDBLK',
+
+    '0', 'BLOCK', '8', 'PROTEZIONI', '2', 'SYM_HDR_ALIM', '70', '0', '10', '0', '20', '0', '30', '0',
+    dxfRect('PROTEZIONI', -13, -6, 10, 12, 3),
+    dxfText('PROTEZIONI', -8, 0, 2.2, 'AC', 3, 'center'),
+    dxfLine('LINEE', -3, 0, 3, 0, 7),
+    dxfRect('PROTEZIONI', 3, -6, 10, 12, 5),
+    dxfText('PROTEZIONI', 8, 0, 2.2, 'UPS', 5, 'center'),
+    '0', 'ENDBLK',
   ].join('\n');
 }
 
@@ -2125,3 +2141,753 @@ export function generaDxfMorsettiera(
 
   return finalizeDxfString(numTavole, sheetW, sheetH, entities);
 }
+
+// ============================================================================
+// 5. SCHEMA A BLOCCHI & MATRICE CAUSA-EFFETTO DXF (UNI 9795 Appendice A.3.4)
+// ============================================================================
+export function generaDxfSchemaBlocchi(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  template: TemplateTavolaDXF
+): string {
+  const sheetW =
+    template.orientamento === 'orizzontale' ? Math.max(template.larghezzaMm, 420) : 297;
+  const sheetH =
+    template.orientamento === 'orizzontale' ? Math.max(template.altezzaMm, 297) : 420;
+
+  const allCausaEffetto = progetto.sistemiIrai.flatMap((sys) =>
+    sys.causaEffetto.map((ce) => ({
+      sistemaSigla: sys.sigla,
+      zonaCodice: sys.zone.find((z) => z.id === ce.causaZonaId)?.codice ?? 'TUTTE',
+      ce,
+    }))
+  );
+
+  const ROWS_PER_PAGE = 9;
+  const numTavole = Math.max(1, Math.ceil(allCausaEffetto.length / ROWS_PER_PAGE));
+  const entities: string[] = [];
+
+  for (let sheetIdx = 0; sheetIdx < numTavole; sheetIdx++) {
+    const ox = sheetIdx * (sheetW + 30);
+    const oy = 0;
+    const geom = renderDxfTemplateFrame(entities, ox, oy, sheetW, sheetH);
+    const footerTopY = renderNotaCartiglioFooter(
+      entities,
+      geom,
+      progetto,
+      calcolo,
+      template,
+      sheetIdx,
+      numTavole,
+      'Schema a Blocchi e Causa-Effetto (UNI 9795 A.3.4)'
+    );
+    const bodyTopY = renderDocumentTopHeader(
+      entities,
+      geom,
+      progetto,
+      'SCHEMA A BLOCCHI E LOGICA CAUSA-EFFETTO (A.3.4)',
+      'SYM_HDR_BLOCCHI'
+    );
+
+    const drawBox = (
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      title: string,
+      linesText: string[],
+      color: number
+    ) => {
+      entities.push(dxfRect('QUADRI', x, y, w, h, color));
+      entities.push(dxfLine('QUADRI', x, y + h - 5.5, x + w, y + h - 5.5, color));
+      entities.push(dxfText('TESTI', x + w / 2, y + h - 2.8, 1.9, title.slice(0, 34), color, 'center'));
+      linesText.slice(0, 4).forEach((ln, i) => {
+        entities.push(
+          dxfText('TESTI', x + 2.5, y + h - 9.0 - i * 4.2, 1.65, ln.slice(0, 40), 7, 'left')
+        );
+      });
+    };
+
+    const drawArrowH = (x1: number, x2: number, y: number, label: string, color = 7) => {
+      entities.push(dxfLine('LINEE', x1, y, x2, y, color));
+      const dir = x2 >= x1 ? 1 : -1;
+      entities.push(
+        dxfLine('LINEE', x2, y, x2 - 2.6 * dir, y + 1.3, color),
+        dxfLine('LINEE', x2, y, x2 - 2.6 * dir, y - 1.3, color)
+      );
+      if (label) {
+        entities.push(dxfText('TESTI', (x1 + x2) / 2, y + 2.3, 1.55, label.slice(0, 26), color, 'center'));
+      }
+    };
+
+    // Parte superiore: Schema a blocchi di sistema (solo su tavola 1, o riepilogo compatto)
+    const diagTop = bodyTopY - 3;
+    const diagH = 112;
+    const diagBot = diagTop - diagH;
+
+    entities.push(dxfRect('TABELLE', geom.innerX, diagBot, geom.innerW, diagH, 8));
+    entities.push(
+      dxfText(
+        'TESTI',
+        geom.innerX + 3,
+        diagTop - 4.0,
+        2.1,
+        'ARCHITETTURA A BLOCCHI E INTERCONNESSIONI LOGICHE DI SISTEMA (UNI 9795 APPENDICE A.3.4)',
+        7,
+        'left'
+      )
+    );
+
+    const iraiSys = progetto.sistemiIrai[0];
+    const evacSys = progetto.sistemiEvac[0];
+    const quadro = progetto.quadri[0];
+    const resIrai = iraiSys ? calcolo.irai[iraiSys.id] : undefined;
+    const resEvac = evacSys ? calcolo.evac[evacSys.id] : undefined;
+
+    const totRiv = iraiSys
+      ? iraiSys.loop.reduce(
+          (a, l) =>
+            a +
+            l.dispositivi.filter(
+              (d) => d.tipo === 'rivelatore_ottico' || d.tipo === 'rivelatore_termico'
+            ).length,
+          0
+        )
+      : 0;
+    const totPuls = iraiSys
+      ? iraiSys.loop.reduce(
+          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'pulsante_manuale').length,
+          0
+        )
+      : 0;
+    const totModIn = iraiSys
+      ? iraiSys.loop.reduce(
+          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'modulo_ingresso').length,
+          0
+        )
+      : 0;
+    const totTarghe = iraiSys
+      ? iraiSys.loop.reduce(
+          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'targa_ottico_acustica').length,
+          0
+        )
+      : 0;
+    const totModOut = iraiSys
+      ? iraiSys.loop.reduce(
+          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'modulo_uscita').length,
+          0
+        )
+      : 0;
+
+    // Colonna 1: Campo di Rivelazione e Ingresso
+    const c1X = geom.innerX + 8;
+    const boxW = 74;
+    drawBox(
+      c1X,
+      diagTop - 36,
+      boxW,
+      26,
+      'CAMPO RIVELAZIONE AUTOMATICA',
+      [
+        `Rivelatori ottici/termici: ${totRiv} pz`,
+        `Zone sorvegliate: ${iraiSys?.zone.length ?? 0}`,
+        `Cavo loop: FTG18OM16 PH30/PH120`,
+      ],
+      1
+    );
+    drawBox(
+      c1X,
+      diagTop - 68,
+      boxW,
+      26,
+      'PULSANTI MANUALI & INGRESSI',
+      [
+        `Pulsanti manuali: ${totPuls} pz`,
+        `Moduli ingresso stato: ${totModIn} pz`,
+        `Loop attivi: ${iraiSys?.loop.length ?? 0}`,
+      ],
+      1
+    );
+    drawBox(
+      c1X,
+      diagTop - 103,
+      boxW,
+      28,
+      'ALIMENTAZIONE PRIMARIA & UPS',
+      [
+        `Quadro: ${quadro?.sigla ?? 'Q.ANT-01'} (${quadro?.tensioneV ?? 230}V)`,
+        `UPS consigliato: ${calcolo.upsKvaConsigliato} kVA`,
+        `Derivaz.: ${quadro?.alimentazionePreferenzialeAMonte ? 'Monte I.G.' : 'Ordinaria'}`,
+      ],
+      3
+    );
+
+    // Colonna 2: Centrale IRAI (cuore logico) + Batterie
+    const c2X = c1X + boxW + 34;
+    const c2W = 88;
+    drawBox(
+      c2X,
+      diagTop - 58,
+      c2W,
+      46,
+      `CENTRALE IRAI ${iraiSys?.sigla ?? 'IRAI-01'}`,
+      [
+        `${iraiSys?.nome ?? 'Centrale Rivelazione Incendi'}`,
+        `Modello: ${iraiSys?.modelloCentrale ?? 'EN 54-2 / EN 54-4'}`,
+        `Iq=${resIrai?.correnteTotaleQuieteA ?? 0}A | Ia=${resIrai?.correnteTotaleAllarmeA ?? 0}A`,
+        `Logica Causa-Effetto: ${iraiSys?.causaEffetto.length ?? 0} regole`,
+      ],
+      1
+    );
+    drawBox(
+      c2X,
+      diagTop - 103,
+      c2W,
+      30,
+      'ALIM. SECONDARIA IRAI (EN 54-4)',
+      [
+        `Batterie installate: ${iraiSys?.capacitaBatterieInstallataAh ?? 0} Ah (24V)`,
+        `Minima richiesta: ${resIrai?.capacitaBatterieMinimaAh ?? 0} Ah`,
+        `Autonomia: ${iraiSys?.autonomiaQuieteRichiestaOre ?? 24}h + ${iraiSys?.autonomiaAllarmeRichiestaMin ?? 30}m`,
+      ],
+      5
+    );
+
+    // Connessioni Colonna 1 -> Colonna 2
+    drawArrowH(c1X + boxW, c2X, diagTop - 23, 'Loop Rivelaz. (PH30)');
+    drawArrowH(c1X + boxW, c2X, diagTop - 52, 'Ingressi / Segnali');
+    drawArrowH(c1X + boxW, c2X, diagTop - 88, '230V Sicurezza (PH120)', 3);
+    // Batterie -> Centrale IRAI
+    entities.push(dxfLine('LINEE', c2X + c2W / 2, diagTop - 73, c2X + c2W / 2, diagTop - 58, 5));
+    entities.push(dxfText('TESTI', c2X + c2W / 2 + 2, diagTop - 65, 1.5, '24V CC', 5, 'left'));
+
+    // Colonna 3: Uscite, EVAC, Segnalazioni e Comandi Tecnologici
+    const c3X = c2X + c2W + 38;
+    const c3W = geom.innerR - 8 - c3X;
+    drawBox(
+      c3X,
+      diagTop - 36,
+      c3W,
+      26,
+      'SEGNALAZIONE OTTICO-ACUSTICA',
+      [
+        `Targhe / Sirene su loop: ${totTarghe} pz`,
+        `Cavo resistente fuoco rosso/viola PH30`,
+        `Attivazione programmata da Matrice C/E`,
+      ],
+      1
+    );
+    const totDiffEvac = evacSys
+      ? evacSys.lineeAltoparlanti.reduce((a, l) => a + l.numeroAltoparlanti, 0)
+      : 0;
+    drawBox(
+      c3X,
+      diagTop - 70,
+      c3W,
+      28,
+      `SISTEMA EVAC ${evacSys?.sigla ?? 'EVAC-01'}`,
+      [
+        `${evacSys?.modelloCentrale ?? 'EN 54-16'} (${resEvac?.potenzaAmplificatoriAttiviW ?? 0}W)`,
+        `Linee altoparlanti: ${evacSys?.lineeAltoparlanti.length ?? 0} (${totDiffEvac} diffusori)`,
+        `Batterie: ${evacSys?.capacitaBatterieInstallataAh ?? 0} Ah (min ${resEvac?.capacitaBatterieMinimaAh ?? 0} Ah)`,
+      ],
+      5
+    );
+    drawBox(
+      c3X,
+      diagTop - 103,
+      c3W,
+      27,
+      'COMANDI E SGANCI TECNOLOGICI',
+      [
+        `Moduli uscita / attuatori: ${totModOut} pz`,
+        `Sgancio impianti HVAC / Ascensori / F.M.`,
+        `Chiusura porte tagliafuoco REI & serrande`,
+      ],
+      3
+    );
+
+    // Connessioni Colonna 2 -> Colonna 3
+    drawArrowH(c2X + c2W, c3X, diagTop - 23, 'Uscite Allarme (PH30)', 1);
+    drawArrowH(
+      c2X + c2W,
+      c3X,
+      diagTop - 48,
+      `Interfaccia ${evacSys?.cavoInterfacciaResistenteFuoco ?? 'PH120'}`,
+      5
+    );
+    drawArrowH(c2X + c2W, c3X, diagTop - 88, 'Comandi / Relè (PH120)', 3);
+
+    // Parte inferiore: Matrice Causa-Effetto (Schema funzionale particolareggiato)
+    const tblTop = diagBot - 4;
+    const tblBot = footerTopY + 3;
+    const hdrH = 10;
+    const rowH = 9.5;
+
+    entities.push(dxfRect('TABELLE', geom.innerX, tblTop - hdrH, geom.innerW, hdrH, 7));
+    entities.push(
+      dxfText(
+        'TESTI',
+        geom.innerX + 3,
+        tblTop - 4.0,
+        2.0,
+        `SCHEMA FUNZIONALE PARTICOLAREGGIATO — MATRICE CAUSA-EFFETTO (Tav. ${sheetIdx + 1}/${numTavole})`,
+        7,
+        'left'
+      )
+    );
+
+    const cols = [
+      { w: 22, label: 'Centrale' },
+      { w: 24, label: 'Zona Causa' },
+      { w: 120, label: 'Evento / Causa Scatenante' },
+      { w: 26, label: 'Targhe O/A' },
+      { w: 88, label: 'Attivazione & Messaggio EVAC' },
+      { w: 34, label: 'Sgancio Imp.' },
+      { w: 34, label: 'Porte REI' },
+      { w: 0, label: 'Ritardo [s]' },
+    ];
+    const usedW = cols.slice(0, -1).reduce((a, c) => a + c.w, 0);
+    cols[cols.length - 1].w = geom.innerW - usedW;
+
+    const colHeaderY = tblTop - hdrH - 7;
+    entities.push(dxfRect('TABELLE', geom.innerX, colHeaderY, geom.innerW, 7, 7));
+    let cx = geom.innerX;
+    cols.forEach((c, idx) => {
+      if (idx > 0) entities.push(dxfLine('TABELLE', cx, colHeaderY, cx, colHeaderY + 7, 7));
+      entities.push(dxfText('TESTI', cx + c.w / 2, colHeaderY + 3.5, 1.7, c.label, 7, 'center'));
+      cx += c.w;
+    });
+
+    const pageRows = allCausaEffetto.slice(
+      sheetIdx * ROWS_PER_PAGE,
+      (sheetIdx + 1) * ROWS_PER_PAGE
+    );
+    pageRows.forEach((item, rIdx) => {
+      const ry = colHeaderY - (rIdx + 1) * rowH;
+      if (ry < tblBot) return;
+      entities.push(dxfRect('TABELLE', geom.innerX, ry, geom.innerW, rowH, 8));
+      let rx = geom.innerX;
+      const vals = [
+        item.sistemaSigla,
+        item.zonaCodice,
+        item.ce.causaDescrizione.slice(0, 56),
+        item.ce.attivaTargheOtticoAcustiche ? 'SI' : 'NO',
+        item.ce.attivaEvac ? `SI: ${item.ce.messaggioEvac.slice(0, 34)}` : 'NO',
+        item.ce.sgancioImpiantiTecnologici ? 'ATTIVO' : 'NO',
+        item.ce.chiusuraPorteTagliafuoco ? 'ATTIVA' : 'NO',
+        `${item.ce.ritardoSecondi} s`,
+      ];
+      cols.forEach((c, idx) => {
+        if (idx > 0) entities.push(dxfLine('TABELLE', rx, ry, rx, ry + rowH, 8));
+        const align = idx === 2 || idx === 4 ? 'left' : 'center';
+        const tx = align === 'left' ? rx + 2.0 : rx + c.w / 2;
+        entities.push(dxfText('TESTI', tx, ry + rowH / 2, 1.65, vals[idx], 7, align));
+        rx += c.w;
+      });
+    });
+  }
+
+  return finalizeDxfString(numTavole, sheetW, sheetH, entities);
+}
+
+// ============================================================================
+// 6. SCHEMI ALIMENTAZIONE ELETTRICA PRIMARIA E SECONDARIA (UNI 9795 A.3.6)
+// ============================================================================
+export function generaDxfAlimentazioni(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  template: TemplateTavolaDXF
+): string {
+  const sheetW =
+    template.orientamento === 'orizzontale' ? Math.max(template.larghezzaMm, 420) : 297;
+  const sheetH =
+    template.orientamento === 'orizzontale' ? Math.max(template.altezzaMm, 297) : 420;
+
+  const numTavole = 1;
+  const entities: string[] = [];
+  const geom = renderDxfTemplateFrame(entities, 0, 0, sheetW, sheetH);
+  const footerTopY = renderNotaCartiglioFooter(
+    entities,
+    geom,
+    progetto,
+    calcolo,
+    template,
+    0,
+    numTavole,
+    'Schemi Alimentazione Primaria e Secondaria (UNI 9795 A.3.6)'
+  );
+  const bodyTopY = renderDocumentTopHeader(
+    entities,
+    geom,
+    progetto,
+    'ALIMENTAZIONE PRIMARIA E SECONDARIA (A.3.6)',
+    'SYM_HDR_ALIM'
+  );
+
+  const areaTop = bodyTopY - 3;
+  const areaBot = footerTopY + 3;
+  const areaH = areaTop - areaBot;
+
+  // Ripartizione area: sinistra (60%) = A.3.6.1 Alimentazione Primaria; destra (40%) = A.3.6.2 Secondaria & Legenda
+  const splitX = geom.innerX + Math.round(geom.innerW * 0.59);
+  const primW = splitX - geom.innerX - 3;
+  const secX = splitX + 3;
+  const secW = geom.innerR - secX;
+
+  // --- RIQUADRO SINISTRO: A.3.6.1 ALIMENTAZIONE ELETTRICA PRIMARIA ---
+  entities.push(dxfRect('TABELLE', geom.innerX, areaBot, primW, areaH, 7));
+  entities.push(dxfLine('TABELLE', geom.innerX, areaTop - 8, geom.innerX + primW, areaTop - 8, 7));
+  entities.push(
+    dxfText(
+      'TESTI',
+      geom.innerX + primW / 2,
+      areaTop - 4.0,
+      2.1,
+      'A.3.6.1 ALIMENTAZIONE ELETTRICA PRIMARIA — ORIGINE, DERIVAZIONE A MONTE E PROTEZIONI',
+      7,
+      'center'
+    )
+  );
+
+  const quadro = progetto.quadri[0];
+  const origX = geom.innerX + 12;
+  const origY = areaTop - 36;
+  // Origine fornitura
+  entities.push(dxfRect('QUADRI', origX, origY, 64, 22, 7));
+  entities.push(
+    dxfText('TESTI', origX + 32, origY + 17.5, 1.85, 'ORIGINE FORNITURA BT', 7, 'center'),
+    dxfText(
+      'TESTI',
+      origX + 32,
+      origY + 12.0,
+      1.65,
+      `${progetto.fornitura.tensioneNominaleV}V ${progetto.fornitura.tipoFornitura.toUpperCase()} · ${progetto.fornitura.sistemaDistribuzione}`,
+      7,
+      'center'
+    ),
+    dxfText(
+      'TESTI',
+      origX + 32,
+      origY + 6.5,
+      1.6,
+      `Icc=${progetto.fornitura.iccPuntoConsegnaKa ?? 'N.D.'} kA · P=${progetto.fornitura.potenzaDisponibileKw} kW`,
+      8,
+      'center'
+    )
+  );
+
+  // Ramo ordinario sezionato da I.G. vs Derivazione Preferenziale Antincendio a monte
+  const nodX = origX + 82;
+  const busPrimY = origY + 11;
+  entities.push(dxfLine('LINEE', origX + 64, busPrimY, nodX, busPrimY, 7));
+  entities.push(dxfCircle('LINEE', nodX, busPrimY, 1.1, 7));
+
+  // Ramo in basso: Interruttore Generale Ordinario (non alimenta servizi antincendio)
+  entities.push(dxfLine('LINEE', nodX, busPrimY, nodX, busPrimY - 18, 8, 'DASHED'));
+  entities.push(dxfInsert('PROTEZIONI', 'SYM_SEZ', nodX, busPrimY - 24, 0.7));
+  entities.push(
+    dxfText('TESTI', nodX + 6, busPrimY - 23, 1.55, 'I.G. ORDINARIO EDIFICIO', 8, 'left'),
+    dxfText('TESTI', nodX + 6, busPrimY - 27.5, 1.45, '(Sezionabile in emergenza)', 8, 'left')
+  );
+
+  // Ramo preferenziale a monte I.G. verso Quadro Antincendio
+  const qAntX = nodX + 26;
+  entities.push(dxfLine('LINEE', nodX, busPrimY, qAntX, busPrimY, 1));
+  entities.push(
+    dxfText(
+      'TESTI',
+      (nodX + qAntX) / 2,
+      busPrimY + 3.0,
+      1.45,
+      quadro?.alimentazionePreferenzialeAMonte ? 'MONTE I.G.' : 'LINEA DEDICATA',
+      1,
+      'center'
+    )
+  );
+
+  // Box Quadro Antincendio
+  const qBoxW = geom.innerX + primW - 10 - qAntX;
+  entities.push(dxfRect('QUADRI', qAntX, origY - 2, qBoxW, 25, 1));
+  entities.push(
+    dxfText(
+      'TESTI',
+      qAntX + qBoxW / 2,
+      origY + 18.5,
+      1.9,
+      `QUADRO ANTINCENDIO ${quadro?.sigla ?? 'Q.ANT-01'}`,
+      1,
+      'center'
+    ),
+    dxfText(
+      'TESTI',
+      qAntX + qBoxW / 2,
+      origY + 13.0,
+      1.65,
+      `${quadro?.nome.slice(0, 32) ?? ''} · ${quadro?.gradoIP ?? 'IP54'}`,
+      7,
+      'center'
+    ),
+    dxfText(
+      'TESTI',
+      qAntX + qBoxW / 2,
+      origY + 7.5,
+      1.6,
+      `I.G. ${quadro?.interruttoreGeneraleInA ?? 40}A (Icu ${quadro?.interruttoreGeneraleIcuKa ?? 16}kA) · ${quadro?.formaSegregazione ?? 'Forma 2b'}`,
+      7,
+      'center'
+    ),
+    dxfText(
+      'TESTI',
+      qAntX + qBoxW / 2,
+      origY + 2.5,
+      1.5,
+      `Linea arrivo: FTG18OM16 PH120 (Circuito protetto)`,
+      3,
+      'center'
+    )
+  );
+
+  // Barra distribuzione interna Quadro Antincendio & derivazioni alle centrali / stazioni ausiliarie
+  const busY = origY - 32;
+  entities.push(dxfLine('LINEE', qAntX + qBoxW / 2, origY - 2, qAntX + qBoxW / 2, busY, 7));
+  const distStartX = geom.innerX + 12;
+  const distEndX = geom.innerX + primW - 12;
+  entities.push(dxfLine('BARRE', distStartX, busY, distEndX, busY, 5));
+
+  const lineePrim = progetto.linee.slice(0, 5);
+  const stepX =
+    lineePrim.length > 1 ? (distEndX - distStartX - 30) / (lineePrim.length - 1) : 0;
+
+  lineePrim.forEach((ln, idx) => {
+    const res = calcolo.linee[ln.id];
+    const lx = lineePrim.length === 1 ? (distStartX + distEndX) / 2 : distStartX + 15 + idx * stepX;
+    entities.push(dxfLine('LINEE', lx, busY, lx, busY - 12, 7));
+    const blk =
+      ln.tipoProtezione === 'magnetotermico_differenziale'
+        ? 'SYM_MTD'
+        : ln.tipoProtezione === 'magnetotermico'
+        ? 'SYM_MT'
+        : ln.tipoProtezione === 'fusibile'
+        ? 'SYM_FUS'
+        : 'SYM_SEZ';
+    entities.push(dxfInsert('PROTEZIONI', blk, lx, busY - 24, 0.85));
+    entities.push(dxfLine('LINEE', lx, busY - 36, lx, busY - 62, 1));
+    // Morsetto/carico terminale
+    const symLoad =
+      ln.tipoUtenza === 'centrale_evac' || ln.tipoUtenza === 'amplificatore_evac'
+        ? 'SYM_EVAC'
+        : ln.tipoUtenza === 'ups_sicurezza' || ln.tipoUtenza === 'commutazione_sicurezza'
+        ? 'SYM_UPS'
+        : 'SYM_DM83_CENTRALE';
+    entities.push(dxfInsert('SIMBOLI_DM83', symLoad, lx, busY - 66, 1.0));
+    entities.push(
+      dxfText('TESTI', lx, busY - 73.5, 1.7, ln.sigla, 7, 'center'),
+      dxfText('TESTI', lx, busY - 78.0, 1.45, ln.descrizione.slice(0, 20), 7, 'center'),
+      dxfText(
+        'TESTI',
+        lx,
+        busY - 82.5,
+        1.45,
+        `${res?.protezioneSceltaInA ?? 16}A ${ln.curvaProtezione} | ${res?.sezioneSceltaMm2 ?? 2.5}mm2`,
+        3,
+        'center'
+      ),
+      dxfText(
+        'TESTI',
+        lx,
+        busY - 87.0,
+        1.4,
+        `FTG18OM16 ${ln.resistenzaFuocoCavoScelto} (dV=${res?.cadutaTensionePct ?? 0}%)`,
+        8,
+        'center'
+      )
+    );
+  });
+
+  // Tabella sintetica protezioni e linee di alimentazione primaria (parte bassa sinistra)
+  const tblPrimTop = areaBot + 52;
+  entities.push(dxfLine('TABELLE', geom.innerX, tblPrimTop, geom.innerX + primW, tblPrimTop, 7));
+  entities.push(
+    dxfText(
+      'TESTI',
+      geom.innerX + 3,
+      tblPrimTop - 4.0,
+      1.75,
+      'RIEPILOGO SEZIONAMENTI, PROTEZIONI E CAVI ALIMENTAZIONE PRIMARIA',
+      7,
+      'left'
+    )
+  );
+  progetto.linee.slice(0, 5).forEach((ln, i) => {
+    const res = calcolo.linee[ln.id];
+    const ry = tblPrimTop - 10.5 - i * 7.5;
+    entities.push(
+      dxfText(
+        'TESTI',
+        geom.innerX + 4,
+        ry,
+        1.55,
+        `${ln.sigla} (${ln.descrizione.slice(0, 22)}) | Prot: ${res?.siglaProtezioneCompleta ?? ''} | Cavo: ${res?.siglaCavoCompleta ?? ''} | L=${ln.lunghezzaM}m dV=${res?.cadutaTensionePct ?? 0}%`,
+        7,
+        'left'
+      )
+    );
+  });
+
+  // --- RIQUADRO DESTRO SUPERIORE: A.3.6.2 ALIMENTAZIONE ELETTRICA SECONDARIA ---
+  const secSplitY = areaBot + 78;
+  entities.push(dxfRect('TABELLE', secX, secSplitY, secW, areaTop - secSplitY, 7));
+  entities.push(dxfLine('TABELLE', secX, areaTop - 8, secX + secW, areaTop - 8, 7));
+  entities.push(
+    dxfText(
+      'TESTI',
+      secX + secW / 2,
+      areaTop - 4.0,
+      2.05,
+      'A.3.6.2 ALIMENTAZIONE SECONDARIA & AUTONOMIE',
+      7,
+      'center'
+    )
+  );
+
+  let secCurY = areaTop - 14;
+  // Sorgenti secondarie (UPS / Batterie)
+  progetto.sorgenti
+    .filter((s) => s.tipo === 'ups' || s.tipo === 'gruppo_batterie' || s.tipo === 'linea_preferenziale')
+    .slice(0, 2)
+    .forEach((src) => {
+      entities.push(dxfRect('PROTEZIONI', secX + 4, secCurY - 20, secW - 8, 20, 5));
+      entities.push(
+        dxfText(
+          'TESTI',
+          secX + 7,
+          secCurY - 4.5,
+          1.75,
+          `${src.sigla} — ${src.nome.slice(0, 34)} (${src.tipo.toUpperCase()})`,
+          5,
+          'left'
+        ),
+        dxfText(
+          'TESTI',
+          secX + 7,
+          secCurY - 10.0,
+          1.55,
+          `Potenza: ${src.potenzaKva} kVA · U=${src.tensioneV}V · Commutazione t=${src.tempoCommutazioneSec}s`,
+          7,
+          'left'
+        ),
+        dxfText(
+          'TESTI',
+          secX + 7,
+          secCurY - 15.5,
+          1.55,
+          `Autonomia richiesta: ${src.autonomiaRichiestaMin} min · UPS consigliato: ${calcolo.upsKvaConsigliato} kVA`,
+          7,
+          'left'
+        )
+      );
+      secCurY -= 24;
+    });
+
+  // Batterie tampone Centrali IRAI
+  progetto.sistemiIrai.slice(0, 2).forEach((sys) => {
+    const r = calcolo.irai[sys.id];
+    const ok = sys.capacitaBatterieInstallataAh >= (r?.capacitaBatterieMinimaAh ?? 0);
+    entities.push(dxfRect('SIMBOLI_DM83', secX + 4, secCurY - 22, secW - 8, 22, ok ? 3 : 1));
+    entities.push(
+      dxfText(
+        'TESTI',
+        secX + 7,
+        secCurY - 4.5,
+        1.75,
+        `BATTERIE IRAI ${sys.sigla} (24V CC - EN 54-4)`,
+        ok ? 3 : 1,
+        'left'
+      ),
+      dxfText(
+        'TESTI',
+        secX + 7,
+        secCurY - 10.0,
+        1.5,
+        `Installata: ${sys.capacitaBatterieInstallataAh} Ah | Minima calc.: ${r?.capacitaBatterieMinimaAh ?? 0} Ah (${ok ? 'CONFORME' : 'NON CONF.'})`,
+        7,
+        'left'
+      ),
+      dxfText(
+        'TESTI',
+        secX + 7,
+        secCurY - 15.5,
+        1.4,
+        `${r?.formulaBatterie ?? ''}`.slice(0, 62),
+        8,
+        'left'
+      )
+    );
+    secCurY -= 25;
+  });
+
+  // Batterie tampone Sistema EVAC
+  progetto.sistemiEvac.slice(0, 1).forEach((sys) => {
+    const r = calcolo.evac[sys.id];
+    const ok = sys.capacitaBatterieInstallataAh >= (r?.capacitaBatterieMinimaAh ?? 0);
+    if (secCurY - 22 >= secSplitY + 2) {
+      entities.push(dxfRect('PROTEZIONI', secX + 4, secCurY - 22, secW - 8, 22, ok ? 3 : 1));
+      entities.push(
+        dxfText(
+          'TESTI',
+          secX + 7,
+          secCurY - 4.5,
+          1.75,
+          `BATTERIE EVAC ${sys.sigla} (EN 54-4 / ISO 7240-19)`,
+          ok ? 3 : 1,
+          'left'
+        ),
+        dxfText(
+          'TESTI',
+          secX + 7,
+          secCurY - 10.0,
+          1.5,
+          `Installata: ${sys.capacitaBatterieInstallataAh} Ah | Minima calc.: ${r?.capacitaBatterieMinimaAh ?? 0} Ah`,
+          7,
+          'left'
+        ),
+        dxfText(
+          'TESTI',
+          secX + 7,
+          secCurY - 15.5,
+          1.4,
+          `${r?.formulaBatterie ?? ''}`.slice(0, 62),
+          8,
+          'left'
+        )
+      );
+    }
+  });
+
+  // --- RIQUADRO DESTRO INFERIORE: LEGENDA SIMBOLI (UNI 9795 A.3.6.1) ---
+  entities.push(dxfRect('TABELLE', secX, areaBot, secW, secSplitY - areaBot - 3, 7));
+  entities.push(
+    dxfLine('TABELLE', secX, secSplitY - 10, secX + secW, secSplitY - 10, 7),
+    dxfText('TESTI', secX + secW / 2, secSplitY - 6.5, 1.9, 'LEGENDA SIMBOLI ALIMENTAZIONE & PROTEZIONE', 7, 'center')
+  );
+
+  const legItems: Array<{ block: string; scale: number; desc: string }> = [
+    { block: 'SYM_SEZ', scale: 0.42, desc: 'Sezionatore / Interruttore Generale di manovra' },
+    { block: 'SYM_MTD', scale: 0.42, desc: 'Interruttore Magnetotermico Differenziale (Id)' },
+    { block: 'SYM_MT', scale: 0.42, desc: 'Interruttore Magnetotermico di linea' },
+    { block: 'SYM_UPS', scale: 0.65, desc: 'Gruppo di continuita / Alimentazione secondaria UPS' },
+    { block: 'SYM_DM83_CENTRALE', scale: 0.65, desc: 'Centrale IRAI / Apparato controllo (D.M. 83)' },
+    { block: 'SYM_EVAC', scale: 0.65, desc: 'Centrale / Amplificatori Sistema EVAC' },
+  ];
+
+  legItems.forEach((it, idx) => {
+    const ly = secSplitY - 16 - idx * 9.5;
+    if (ly < areaBot + 4) return;
+    entities.push(dxfInsert('PROTEZIONI', it.block, secX + 12, ly, it.scale));
+    entities.push(dxfText('TESTI', secX + 24, ly - 0.5, 1.55, it.desc, 7, 'left'));
+  });
+
+  return finalizeDxfString(numTavole, sheetW, sheetH, entities);
+}
+

@@ -13,6 +13,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
+import { SEZIONI_EVAC_STANDARD } from '../engine/calculator';
 import {
   esportaExcelRiepilogoSistemaIrai,
   esportaPdfRiepilogoSistemaIrai,
@@ -21,8 +22,10 @@ import {
   ClasseCPR,
   CurvaIntervento,
   DispositivoIRAI,
+  DistribuzioneCaricoEVAC,
   EsitoVerifica,
   LayoutNodeOverride,
+  LineaAltoparlantiEVAC,
   LineaUtenza,
   LivelloPrestazione,
   LoopIRAI,
@@ -398,12 +401,14 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
               sigla: 'EV-Z1',
               zonaNome: 'Zona 1',
               topologia: 'anello',
+              distribuzioneCarico: 'concentrato',
               tensioneLineaV: 100,
               numeroAltoparlanti: 12,
               potenzaTotaleAltoparlantiW: 120,
               lunghezzaM: 180,
               sezioneMm2: 1.5,
               resistenzaFuoco: 'PH30',
+              cadutaTensioneMaxPct: 10,
               amplificatoreId: `amp-${Date.now()}`,
             },
           ],
@@ -2089,10 +2094,68 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                               <span className="font-mono text-slate-500">{lp.resistenzaFuoco}</span>
                             </div>
 
-                            <div className="flex items-center gap-3">
-                              <div className="font-mono text-xs text-blue-800 tabular-nums">
+                            <div className="flex items-center gap-2">
+                              <div className="font-mono text-xs text-blue-800 tabular-nums mr-1">
                                 {lpRes?.numeroDispositivi ?? 0}/{lp.maxDispositiviConsentiti} disp · Iq={lpRes?.correnteQuieteMa} mA · Ia={lpRes?.correnteAllarmeMa} mA · ΔV={lpRes?.cadutaTensioneLoopV} V
                               </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const existingSigle = new Set(
+                                    sysIraiAttivo.loop.map((l) => l.sigla.toUpperCase())
+                                  );
+                                  let nextNum = sysIraiAttivo.loop.length + 1;
+                                  let nextSigla = `LOOP ${nextNum}`;
+                                  while (existingSigle.has(nextSigla.toUpperCase())) {
+                                    nextNum += 1;
+                                    nextSigla = `LOOP ${nextNum}`;
+                                  }
+                                  const now = Date.now();
+                                  const oldLoopNumMatch = lp.sigla.match(/\d+/);
+                                  const oldNumStr = oldLoopNumMatch ? oldLoopNumMatch[0] : null;
+
+                                  const loopClonato: LoopIRAI = {
+                                    ...lp,
+                                    id: `loop-${now}`,
+                                    sigla: nextSigla,
+                                    nome: `${lp.nome} (copia)`,
+                                    dispositivi: lp.dispositivi.map((d, dIdx) => {
+                                      const updatedSigla =
+                                        oldNumStr && d.sigla.includes(`${oldNumStr}.`)
+                                          ? d.sigla.replace(`${oldNumStr}.`, `${nextNum}.`)
+                                          : d.sigla;
+                                      return {
+                                        ...d,
+                                        id: `disp-${now}-${dIdx}`,
+                                        sigla: updatedSigla,
+                                      };
+                                    }),
+                                  };
+
+                                  onAggiornaProgetto(
+                                    (p) => ({
+                                      ...p,
+                                      sistemiIrai: p.sistemiIrai.map((sys) => {
+                                        if (sys.id !== sysIraiAttivo.id) return sys;
+                                        const nextLoops = [...sys.loop];
+                                        nextLoops.splice(lpIndex + 1, 0, loopClonato);
+                                        return { ...sys, loop: nextLoops };
+                                      }),
+                                    }),
+                                    {
+                                      sezione: sysIraiAttivo.sigla,
+                                      campo: 'Duplicazione Loop',
+                                      prevVal: `${lp.sigla} (${lp.dispositivi.length} disp)`,
+                                      newVal: `${loopClonato.sigla} (${loopClonato.dispositivi.length} disp)`,
+                                    }
+                                  );
+                                }}
+                                title="Duplica questo loop"
+                                className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 cursor-pointer"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Duplica Loop
+                              </button>
                               {sysIraiAttivo.loop.length > 1 && (
                                 <button
                                   type="button"
@@ -2792,7 +2855,7 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                       Carico altoparlanti: {calcolo.evac[sysEvacAttivo.id]?.potenzaTotaleAltoparlantiW} W · Amplificatori attivi: {calcolo.evac[sysEvacAttivo.id]?.potenzaAmplificatoriAttiviW} W · Riserva N+1: {sysEvacAttivo.ridondanzaAmplificatoriN1 ? 'Attiva' : 'Assente'}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
                     <label className="inline-flex items-center gap-1.5 cursor-pointer">
                       <input
                         type="checkbox"
@@ -2827,99 +2890,451 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                       />
                       Separazione circuiti potenza
                     </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextIdx = sysEvacAttivo.lineeAltoparlanti.length + 1;
+                        const newLine: LineaAltoparlantiEVAC = {
+                          id: `spk-${Date.now()}`,
+                          sigla: `EV-Z${nextIdx}`,
+                          zonaNome: `Zona ${nextIdx} - Nuova Zona Altoparlanti`,
+                          topologia: 'anello',
+                          distribuzioneCarico: 'concentrato',
+                          tensioneLineaV: 100,
+                          numeroAltoparlanti: 10,
+                          potenzaTotaleAltoparlantiW: 120,
+                          lunghezzaM: 180,
+                          sezioneMm2: 1.5,
+                          resistenzaFuoco: 'PH30',
+                          cadutaTensioneMaxPct: 10,
+                          amplificatoreId:
+                            sysEvacAttivo.amplificatori.find((a) => !a.diRiserva)?.id ??
+                            sysEvacAttivo.amplificatori[0]?.id ??
+                            '',
+                        };
+                        onAggiornaProgetto((p) => ({
+                          ...p,
+                          sistemiEvac: p.sistemiEvac.map((s) =>
+                            s.id === sysEvacAttivo.id
+                              ? { ...s, lineeAltoparlanti: [...s.lineeAltoparlanti, newLine] }
+                              : s
+                          ),
+                        }));
+                      }}
+                      className="inline-flex items-center gap-1 rounded bg-blue-700 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-800 cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Aggiungi Linea Altoparlanti
+                    </button>
                   </div>
                 </div>
 
-                <div className="overflow-x-auto rounded border border-slate-200">
-                  <table className="w-full text-left text-xs">
-                    <thead className="border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
-                      <tr>
-                        <th className="px-3 py-2">Linea</th>
-                        <th className="px-3 py-2">Zona Altoparlanti</th>
-                        <th className="px-3 py-2">Topologia</th>
-                        <th className="px-3 py-2">Altoparlanti / Potenza (W)</th>
-                        <th className="px-3 py-2">L (m) / Sez.</th>
-                        <th className="px-3 py-2">Cavo PH</th>
-                        <th className="px-3 py-2">ΔV (%)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {sysEvacAttivo.lineeAltoparlanti.map((ln) => {
-                        const res = calcolo.evac[sysEvacAttivo.id]?.lineeRisultati.find(
-                          (r) => r.lineaId === ln.id
-                        );
-                        return (
-                          <tr key={ln.id}>
-                            <td className="px-3 py-2 font-mono font-semibold">{ln.sigla}</td>
-                            <td className="px-3 py-2">{ln.zonaNome}</td>
-                            <td className="px-3 py-2">
-                              <select
-                                value={ln.topologia}
-                                onChange={(e) =>
-                                  onAggiornaProgetto((p) => ({
-                                    ...p,
-                                    sistemiEvac: p.sistemiEvac.map((s) =>
-                                      s.id === sysEvacAttivo.id
-                                        ? {
-                                            ...s,
-                                            lineeAltoparlanti: s.lineeAltoparlanti.map((x) =>
-                                              x.id === ln.id
-                                                ? { ...x, topologia: e.target.value as 'radiale' | 'anello' }
-                                                : x
+                {(() => {
+                  const updateLineaEvac = (
+                    lineaId: string,
+                    patch: Partial<LineaAltoparlantiEVAC>
+                  ) => {
+                    onAggiornaProgetto((p) => ({
+                      ...p,
+                      sistemiEvac: p.sistemiEvac.map((s) =>
+                        s.id === sysEvacAttivo.id
+                          ? {
+                              ...s,
+                              lineeAltoparlanti: s.lineeAltoparlanti.map((x) =>
+                                x.id === lineaId ? { ...x, ...patch } : x
+                              ),
+                            }
+                          : s
+                      ),
+                    }));
+                  };
+
+                  const resSysEvac = calcolo.evac[sysEvacAttivo.id];
+                  const lineeNonConformi =
+                    resSysEvac?.lineeRisultati.filter((r) => !r.conformeCadutaTensione) ?? [];
+
+                  return (
+                    <>
+                      <div className="overflow-x-auto rounded border border-slate-200">
+                        <table className="w-full text-left text-xs">
+                          <thead className="border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
+                            <tr>
+                              <th className="px-2.5 py-2">Linea & Zona</th>
+                              <th className="px-2.5 py-2">Topologia / Carico</th>
+                              <th className="px-2.5 py-2">U (V)</th>
+                              <th className="px-2.5 py-2">Diffusori / Potenza (W)</th>
+                              <th className="px-2.5 py-2">Lunghezza (m)</th>
+                              <th className="px-2.5 py-2">Sezione / Cavo</th>
+                              <th className="px-2.5 py-2">ΔV Max (%)</th>
+                              <th className="px-2.5 py-2">ΔV Calcolata</th>
+                              <th className="px-2.5 py-2">Esito Verifica</th>
+                              <th className="px-2.5 py-2 text-right">Azioni</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {sysEvacAttivo.lineeAltoparlanti.map((ln) => {
+                              const res = resSysEvac?.lineeRisultati.find(
+                                (r) => r.lineaId === ln.id
+                              );
+                              const ok = res?.conformeCadutaTensione ?? true;
+                              return (
+                                <tr
+                                  key={ln.id}
+                                  className={!ok ? 'bg-red-50/40' : undefined}
+                                >
+                                  <td className="px-2.5 py-2 space-y-1">
+                                    <input
+                                      type="text"
+                                      value={ln.sigla}
+                                      onChange={(e) =>
+                                        updateLineaEvac(ln.id, { sigla: e.target.value })
+                                      }
+                                      className="w-20 rounded border border-slate-200 px-1.5 py-0.5 font-mono font-semibold text-xs"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={ln.zonaNome}
+                                      onChange={(e) =>
+                                        updateLineaEvac(ln.id, { zonaNome: e.target.value })
+                                      }
+                                      className="block w-44 rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-700"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-2 space-y-1">
+                                    <select
+                                      value={ln.topologia}
+                                      onChange={(e) =>
+                                        updateLineaEvac(ln.id, {
+                                          topologia: e.target.value as 'radiale' | 'anello',
+                                        })
+                                      }
+                                      className="block w-28 rounded border border-slate-200 px-1.5 py-0.5 text-xs"
+                                    >
+                                      <option value="anello">Anello (×0.5)</option>
+                                      <option value="radiale">Radiale (×1.0)</option>
+                                    </select>
+                                    <select
+                                      value={ln.distribuzioneCarico ?? 'concentrato'}
+                                      onChange={(e) =>
+                                        updateLineaEvac(ln.id, {
+                                          distribuzioneCarico: e.target
+                                            .value as DistribuzioneCaricoEVAC,
+                                        })
+                                      }
+                                      className="block w-28 rounded border border-slate-200 px-1.5 py-0.5 text-xs"
+                                    >
+                                      <option value="concentrato">Concentrato</option>
+                                      <option value="distribuito">Distribuito (×0.5)</option>
+                                    </select>
+                                  </td>
+                                  <td className="px-2.5 py-2 font-mono">
+                                    <select
+                                      value={ln.tensioneLineaV}
+                                      onChange={(e) =>
+                                        updateLineaEvac(ln.id, {
+                                          tensioneLineaV: Number(e.target.value) as 100 | 70,
+                                        })
+                                      }
+                                      className="rounded border border-slate-200 px-1.5 py-0.5 text-xs"
+                                    >
+                                      <option value={100}>100 V</option>
+                                      <option value={70}>70 V</option>
+                                    </select>
+                                  </td>
+                                  <td className="px-2.5 py-2 font-mono">
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        value={ln.numeroAltoparlanti}
+                                        onChange={(e) =>
+                                          updateLineaEvac(ln.id, {
+                                            numeroAltoparlanti: Math.max(
+                                              1,
+                                              Number(e.target.value) || 1
                                             ),
-                                          }
-                                        : s
-                                    ),
-                                  }))
-                                }
-                                className="rounded border border-slate-200 px-1.5 py-0.5 text-xs"
-                              >
-                                <option value="anello">Anello</option>
-                                <option value="radiale">Radiale</option>
-                              </select>
-                            </td>
-                            <td className="px-3 py-2 font-mono">
-                              {ln.numeroAltoparlanti} pz ·{' '}
-                              <input
-                                type="number"
-                                value={ln.potenzaTotaleAltoparlantiW}
-                                onChange={(e) =>
-                                  onAggiornaProgetto((p) => ({
-                                    ...p,
-                                    sistemiEvac: p.sistemiEvac.map((s) =>
-                                      s.id === sysEvacAttivo.id
-                                        ? {
-                                            ...s,
-                                            lineeAltoparlanti: s.lineeAltoparlanti.map((x) =>
-                                              x.id === ln.id
+                                          })
+                                        }
+                                        className="w-12 rounded border border-slate-200 px-1 py-0.5 text-xs"
+                                      />
+                                      <span className="text-slate-500">pz</span>
+                                    </div>
+                                    <div className="mt-1 flex items-center gap-1">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={ln.potenzaTotaleAltoparlantiW}
+                                        onChange={(e) =>
+                                          updateLineaEvac(ln.id, {
+                                            potenzaTotaleAltoparlantiW: Math.max(
+                                              0,
+                                              Number(e.target.value) || 0
+                                            ),
+                                          })
+                                        }
+                                        className="w-16 rounded border border-slate-200 px-1 py-0.5 text-xs font-semibold"
+                                      />
+                                      <span>W</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-2 font-mono">
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        value={ln.lunghezzaM}
+                                        onChange={(e) =>
+                                          updateLineaEvac(ln.id, {
+                                            lunghezzaM: Math.max(
+                                              0,
+                                              Number(e.target.value) || 0
+                                            ),
+                                          })
+                                        }
+                                        className="w-16 rounded border border-slate-200 px-1 py-0.5 text-xs font-semibold"
+                                      />
+                                      <span>m</span>
+                                    </div>
+                                    <div className="mt-1 text-[11px] text-slate-500">
+                                      L_max: {res?.lunghezzaMassimaAmmissibileM ?? 0} m
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-2 font-mono space-y-1">
+                                    <select
+                                      value={ln.sezioneMm2}
+                                      onChange={(e) =>
+                                        updateLineaEvac(ln.id, {
+                                          sezioneMm2: Number(e.target.value) || 1.5,
+                                        })
+                                      }
+                                      className="block w-24 rounded border border-slate-200 px-1.5 py-0.5 text-xs font-semibold"
+                                    >
+                                      {SEZIONI_EVAC_STANDARD.map((s) => (
+                                        <option key={s} value={s}>
+                                          {s} mm²
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <select
+                                      value={ln.resistenzaFuoco}
+                                      onChange={(e) =>
+                                        updateLineaEvac(ln.id, {
+                                          resistenzaFuoco: e.target
+                                            .value as ResistenzaFuocoCavo,
+                                        })
+                                      }
+                                      className="block w-24 rounded border border-slate-200 px-1.5 py-0.5 text-xs"
+                                    >
+                                      {(['PH30', 'PH60', 'PH90', 'PH120'] as ResistenzaFuocoCavo[]).map(
+                                        (ph) => (
+                                          <option key={ph} value={ph}>
+                                            {ph}
+                                          </option>
+                                        )
+                                      )}
+                                    </select>
+                                  </td>
+                                  <td className="px-2.5 py-2 font-mono">
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={20}
+                                        step={0.5}
+                                        value={ln.cadutaTensioneMaxPct ?? 10}
+                                        onChange={(e) =>
+                                          updateLineaEvac(ln.id, {
+                                            cadutaTensioneMaxPct: Math.max(
+                                              1,
+                                              Number(e.target.value) || 10
+                                            ),
+                                          })
+                                        }
+                                        className="w-14 rounded border border-slate-200 px-1 py-0.5 text-xs"
+                                      />
+                                      <span>%</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-2 font-mono">
+                                    <div
+                                      className={`font-bold ${
+                                        ok ? 'text-emerald-700' : 'text-red-700'
+                                      }`}
+                                    >
+                                      {res?.cadutaTensionePct.toFixed(2) ?? '0.00'}%
+                                    </div>
+                                    <div className="text-[11px] text-slate-600">
+                                      {res?.cadutaTensioneV.toFixed(2) ?? '0.00'} V ·{' '}
+                                      {res?.attenuazioneDb.toFixed(2) ?? '0.00'} dB
+                                    </div>
+                                    <div className="text-[11px] text-slate-500">
+                                      I={res?.correnteLineaA ?? 0} A
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-2">
+                                    {ok ? (
+                                      <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                                        <CheckCircle2 className="h-3 w-3" />
+                                        Conforme
+                                      </span>
+                                    ) : (
+                                      <div className="space-y-1">
+                                        <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800">
+                                          <AlertTriangle className="h-3 w-3" />
+                                          Superata
+                                        </span>
+                                        {res && res.sezioneMinimaConsigliataMm2 > ln.sezioneMm2 && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              updateLineaEvac(ln.id, {
+                                                sezioneMm2: res.sezioneMinimaConsigliataMm2,
+                                              })
+                                            }
+                                            className="block rounded border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-800 hover:bg-blue-100 cursor-pointer whitespace-nowrap"
+                                          >
+                                            Applica {res.sezioneMinimaConsigliataMm2} mm²
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="px-2.5 py-2 text-right">
+                                    <div className="inline-flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        title="Duplica linea altoparlanti"
+                                        onClick={() => {
+                                          const copyLine: LineaAltoparlantiEVAC = {
+                                            ...ln,
+                                            id: `spk-${Date.now()}`,
+                                            sigla: `${ln.sigla}-BIS`,
+                                          };
+                                          onAggiornaProgetto((p) => ({
+                                            ...p,
+                                            sistemiEvac: p.sistemiEvac.map((s) =>
+                                              s.id === sysEvacAttivo.id
                                                 ? {
-                                                    ...x,
-                                                    potenzaTotaleAltoparlantiW: Number(e.target.value) || 0,
+                                                    ...s,
+                                                    lineeAltoparlanti: [
+                                                      ...s.lineeAltoparlanti,
+                                                      copyLine,
+                                                    ],
                                                   }
-                                                : x
+                                                : s
                                             ),
+                                          }));
+                                        }}
+                                        className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
+                                      >
+                                        <Copy className="h-3.5 w-3.5" />
+                                      </button>
+                                      {sysEvacAttivo.lineeAltoparlanti.length > 1 && (
+                                        <button
+                                          type="button"
+                                          title="Elimina linea altoparlanti"
+                                          onClick={() =>
+                                            onAggiornaProgetto((p) => ({
+                                              ...p,
+                                              sistemiEvac: p.sistemiEvac.map((s) =>
+                                                s.id === sysEvacAttivo.id
+                                                  ? {
+                                                      ...s,
+                                                      lineeAltoparlanti:
+                                                        s.lineeAltoparlanti.filter(
+                                                          (x) => x.id !== ln.id
+                                                        ),
+                                                    }
+                                                  : s
+                                              ),
+                                            }))
                                           }
-                                        : s
-                                    ),
-                                  }))
-                                }
-                                className="w-16 rounded border border-slate-200 px-1 py-0.5 text-xs"
-                              />{' '}
-                              W
-                            </td>
-                            <td className="px-3 py-2 font-mono">
-                              {ln.lunghezzaM} m · {ln.sezioneMm2} mm²
-                            </td>
-                            <td className="px-3 py-2 font-mono">{ln.resistenzaFuoco}</td>
-                            <td className="px-3 py-2 font-mono font-semibold">
-                              {res?.cadutaTensionePct ?? 0}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                                          className="rounded p-1 text-slate-500 hover:bg-red-50 hover:text-red-700 cursor-pointer"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Modulo Analitico Verifica Caduta di Tensione Linee EVAC */}
+                      <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+                            Modulo Verifica Caduta di Tensione Linee EVAC (UNI ISO 7240-19 / EN 54-24)
+                          </h3>
+                          <span
+                            className={`text-xs font-semibold ${
+                              lineeNonConformi.length === 0
+                                ? 'text-emerald-700'
+                                : 'text-red-700'
+                            }`}
+                          >
+                            {lineeNonConformi.length === 0
+                              ? 'Tutte le linee altoparlanti verificate conformi'
+                              : `${lineeNonConformi.length} linea/e oltre la soglia di caduta ammessa`}
+                          </span>
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {sysEvacAttivo.lineeAltoparlanti.map((ln) => {
+                            const res = resSysEvac?.lineeRisultati.find(
+                              (r) => r.lineaId === ln.id
+                            );
+                            if (!res) return null;
+                            return (
+                              <div
+                                key={ln.id}
+                                className={`rounded border bg-white p-2.5 text-xs ${
+                                  res.conformeCadutaTensione
+                                    ? 'border-slate-200'
+                                    : 'border-red-300 bg-red-50/30'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between font-semibold text-slate-900">
+                                  <span>
+                                    <span className="font-mono text-blue-700 mr-1.5">
+                                      {ln.sigla}
+                                    </span>
+                                    {ln.zonaNome}
+                                  </span>
+                                  <span
+                                    className={`font-mono ${
+                                      res.conformeCadutaTensione
+                                        ? 'text-emerald-700'
+                                        : 'text-red-700'
+                                    }`}
+                                  >
+                                    ΔV = {res.cadutaTensionePct.toFixed(2)}% (≤ {res.sogliaMaxPct}%)
+                                  </span>
+                                </div>
+                                <div className="mt-1 grid grid-cols-3 gap-1.5 font-mono text-[11px] text-slate-600">
+                                  <div>I = {res.correnteLineaA} A</div>
+                                  <div>Z_carico = {res.impedenzaCaricoOhm} Ω</div>
+                                  <div>R_eff = {res.resistenzaEffettivaOhm} Ω</div>
+                                  <div>Att. = {res.attenuazioneDb} dB</div>
+                                  <div>ΔP = {res.perditaPotenzaPct}%</div>
+                                  <div>
+                                    L_max = {res.lunghezzaMassimaAmmissibileM} m (S_min{' '}
+                                    {res.sezioneMinimaConsigliataMm2} mm²)
+                                  </div>
+                                </div>
+                                <div className="mt-1.5 border-t border-slate-100 pt-1 font-mono text-[10.5px] text-slate-500">
+                                  {res.formulaDettaglio}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
 
                 <div className="rounded border border-blue-200 bg-blue-50 p-3 font-mono text-xs text-blue-950">
                   {calcolo.evac[sysEvacAttivo.id]?.formulaBatterie} · Installata:{' '}

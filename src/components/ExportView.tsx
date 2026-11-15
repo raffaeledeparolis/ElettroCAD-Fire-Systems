@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  BookCheck,
   FileCode2,
   FileSpreadsheet,
   FileText,
@@ -8,12 +9,18 @@ import {
 } from 'lucide-react';
 import { AVVISO_RESPONSABILITA_LEGALE } from '../data/rulesAndLibrary';
 import {
+  generaDxfAlimentazioni,
   generaDxfElencoCavi,
   generaDxfFronteQuadro,
   generaDxfMorsettiera,
   generaDxfSchema,
+  generaDxfSchemaBlocchi,
 } from '../engine/dxfEngine';
 import {
+  esportaAppendiceA_ElencoComponentiA32Xlsx,
+  esportaAppendiceA_RelazioneEsecutivaA33,
+  esportaAppendiceA_RelazionePreliminareA2,
+  esportaAppendiceA_SchedaRiassuntivaA32,
   esportaComputoXlsx,
   esportaDxfDocumento,
   esportaExcelRiepilogoSistemaIrai,
@@ -43,6 +50,7 @@ export const ExportView: React.FC<ExportViewProps> = ({
   template,
 }) => {
   const [formatoPdf, setFormatoPdf] = useState<'A3' | 'A4'>('A3');
+  const [formatoAppendiceA, setFormatoAppendiceA] = useState<'doc' | 'pdf'>('doc');
   const [ultimoExport, setUltimoExport] = useState<string | null>(null);
 
   const nonConformi = esiti.filter((e) => e.stato === 'non_conforme').length;
@@ -52,13 +60,17 @@ export const ExportView: React.FC<ExportViewProps> = ({
     | 'unifilare'
     | 'fronte_quadro'
     | 'morsettiera'
-    | 'elenco_cavi';
+    | 'elenco_cavi'
+    | 'schema_blocchi'
+    | 'alimentazioni';
 
   const [dxfSelezionati, setDxfSelezionati] = useState<Record<TipoElaboratoDxf, boolean>>({
     unifilare: true,
     fronte_quadro: true,
     morsettiera: true,
     elenco_cavi: true,
+    schema_blocchi: true,
+    alimentazioni: true,
   });
 
   const ELABORATI_DXF: Array<{
@@ -91,6 +103,18 @@ export const ExportView: React.FC<ExportViewProps> = ({
       descrizione: 'Tabella grafica posa CEI 64-8 con icone posa, Ib/In/Iz, lunghezze ed estremi.',
       suffisso: 'Elenco_Cavi',
     },
+    {
+      id: 'schema_blocchi',
+      titolo: 'Schema a Blocchi & Causa-Effetto (App. A.3.4)',
+      descrizione: 'Interconnessioni logiche IRAI/EVAC/Comandi integrate con matrice causa-effetto.',
+      suffisso: 'Schema_Blocchi_A34',
+    },
+    {
+      id: 'alimentazioni',
+      titolo: 'Alimentazione Primaria e Secondaria (App. A.3.6)',
+      descrizione: 'Origine fornitura a monte I.G., sezionamenti, UPS/batterie, autonomie e legenda simboli.',
+      suffisso: 'Alimentazioni_A36',
+    },
   ];
 
   const countDxfSelezionati = ELABORATI_DXF.filter((e) => dxfSelezionati[e.id]).length;
@@ -103,6 +127,8 @@ export const ExportView: React.FC<ExportViewProps> = ({
       fronte_quadro: nextVal,
       morsettiera: nextVal,
       elenco_cavi: nextVal,
+      schema_blocchi: nextVal,
+      alimentazioni: nextVal,
     });
   };
 
@@ -119,8 +145,12 @@ export const ExportView: React.FC<ExportViewProps> = ({
           content = generaDxfFronteQuadro(progetto, calcolo, template);
         } else if (el.id === 'morsettiera') {
           content = generaDxfMorsettiera(progetto, calcolo, template);
-        } else {
+        } else if (el.id === 'elenco_cavi') {
           content = generaDxfElencoCavi(progetto, calcolo, template);
+        } else if (el.id === 'schema_blocchi') {
+          content = generaDxfSchemaBlocchi(progetto, calcolo, template);
+        } else {
+          content = generaDxfAlimentazioni(progetto, calcolo, template);
         }
         esportaDxfDocumento(content, progetto.identificativi.commessa, el.suffisso);
       };
@@ -135,6 +165,154 @@ export const ExportView: React.FC<ExportViewProps> = ({
     setUltimoExport(
       `Esportati ${daEsportare.length} file DXF R2000 con template unificato (${daEsportare
         .map((e) => e.titolo)
+        .join(', ')}).`
+    );
+  };
+
+  type TipoDocAppendiceA =
+    | 'a2_preliminare'
+    | 'a32_scheda'
+    | 'a32_componenti_xlsx'
+    | 'a33_relazione'
+    | 'a34_blocchi_dxf'
+    | 'a36_alimentazioni_dxf';
+
+  const [appendiceASelezionati, setAppendiceASelezionati] = useState<
+    Record<TipoDocAppendiceA, boolean>
+  >({
+    a2_preliminare: true,
+    a32_scheda: true,
+    a32_componenti_xlsx: true,
+    a33_relazione: true,
+    a34_blocchi_dxf: true,
+    a36_alimentazioni_dxf: true,
+  });
+
+  const DOCUMENTI_APPENDICE_A: Array<{
+    id: TipoDocAppendiceA;
+    clausola: string;
+    titolo: string;
+    descrizione: string;
+    formatoBadge: string;
+  }> = [
+    {
+      id: 'a2_preliminare',
+      clausola: 'App. A.2',
+      titolo: 'Relazione Tecnico-Descrittiva Preliminare & Dichiarazione UNI 9795',
+      descrizione:
+        'Tipologia e consistenza impianti, schema a blocchi preliminare, dati per tavole di inquadramento fabbricato (A.2 b) e dichiarazione conformità o scostamenti (A.2 c).',
+      formatoBadge: formatoAppendiceA.toUpperCase(),
+    },
+    {
+      id: 'a32_scheda',
+      clausola: 'App. A.3.2',
+      titolo: 'Scheda Riassuntiva di Progetto (Punti a ÷ i)',
+      descrizione:
+        'Anagrafica progetto/progettista, registro completo disegni e documenti (codici, rev., date, titoli), modelli centrali, dichiarazione conformità/deroghe ed elenco componenti.',
+      formatoBadge: formatoAppendiceA.toUpperCase(),
+    },
+    {
+      id: 'a32_componenti_xlsx',
+      clausola: 'App. A.3.2-i',
+      titolo: 'Registro Elaborati & Elenco Completo Componenti (Multi-foglio)',
+      descrizione:
+        'Fogli Excel separati: Registro elaborati (b-e), Centrali e quadri (f-g), Componenti di campo IRAI, Componenti EVAC, Cavi/protezioni ed esiti conformità (h).',
+      formatoBadge: 'XLSX',
+    },
+    {
+      id: 'a33_relazione',
+      clausola: 'App. A.3.3',
+      titolo: 'Relazione Tecnico-Descrittiva Esecutiva, Autonomie & Dimensionamento Cavi',
+      descrizione:
+        'Zone sorvegliate e sensori associati, criteri di scelta, limiti applicazione, normativa, calcolo analitico autonomie, dimensionamento dettagliato cavi (loop, EVAC, alim.) e cavi ammessi CEI 20-105/CPR.',
+      formatoBadge: formatoAppendiceA.toUpperCase(),
+    },
+    {
+      id: 'a34_blocchi_dxf',
+      clausola: 'App. A.3.4',
+      titolo: 'Schema a Blocchi di Sistema & Matrice Causa-Effetto',
+      descrizione:
+        'Tavola CAD con tutte le tipologie di apparati, interconnessioni logiche e tabella funzionale particolareggiata Causa-Effetto.',
+      formatoBadge: 'DXF R2000',
+    },
+    {
+      id: 'a36_alimentazioni_dxf',
+      clausola: 'App. A.3.6',
+      titolo: 'Schemi Alimentazione Elettrica Primaria (A.3.6.1) e Secondaria (A.3.6.2)',
+      descrizione:
+        'Origine alimentazione primaria a monte I.G., sezionamenti, protezioni e legenda simboli; alimentazione secondaria UPS/batterie tampone e calcolo autonomie.',
+      formatoBadge: 'DXF R2000',
+    },
+  ];
+
+  const countAppendiceASelezionati = DOCUMENTI_APPENDICE_A.filter(
+    (d) => appendiceASelezionati[d.id]
+  ).length;
+  const tuttiAppendiceASelezionati =
+    countAppendiceASelezionati === DOCUMENTI_APPENDICE_A.length;
+
+  const toggleTuttiAppendiceA = () => {
+    const nextVal = !tuttiAppendiceASelezionati;
+    setAppendiceASelezionati({
+      a2_preliminare: nextVal,
+      a32_scheda: nextVal,
+      a32_componenti_xlsx: nextVal,
+      a33_relazione: nextVal,
+      a34_blocchi_dxf: nextVal,
+      a36_alimentazioni_dxf: nextVal,
+    });
+  };
+
+  const handleEsportaAppendiceASelezionati = () => {
+    const daEsportare = DOCUMENTI_APPENDICE_A.filter(
+      (d) => appendiceASelezionati[d.id]
+    );
+    if (daEsportare.length === 0) return;
+
+    daEsportare.forEach((docItem, idx) => {
+      const esegui = () => {
+        if (docItem.id === 'a2_preliminare') {
+          esportaAppendiceA_RelazionePreliminareA2(
+            progetto,
+            calcolo,
+            esiti,
+            formatoAppendiceA
+          );
+        } else if (docItem.id === 'a32_scheda') {
+          esportaAppendiceA_SchedaRiassuntivaA32(
+            progetto,
+            calcolo,
+            esiti,
+            formatoAppendiceA
+          );
+        } else if (docItem.id === 'a32_componenti_xlsx') {
+          esportaAppendiceA_ElencoComponentiA32Xlsx(progetto, calcolo, esiti);
+        } else if (docItem.id === 'a33_relazione') {
+          esportaAppendiceA_RelazioneEsecutivaA33(
+            progetto,
+            calcolo,
+            esiti,
+            formatoAppendiceA
+          );
+        } else if (docItem.id === 'a34_blocchi_dxf') {
+          const dxf = generaDxfSchemaBlocchi(progetto, calcolo, template);
+          esportaDxfDocumento(dxf, progetto.identificativi.commessa, 'Schema_Blocchi_A34');
+        } else {
+          const dxf = generaDxfAlimentazioni(progetto, calcolo, template);
+          esportaDxfDocumento(dxf, progetto.identificativi.commessa, 'Alimentazioni_A36');
+        }
+      };
+
+      if (idx === 0) {
+        esegui();
+      } else {
+        window.setTimeout(esegui, idx * 200);
+      }
+    });
+
+    setUltimoExport(
+      `Esportati ${daEsportare.length} documenti normativi Appendice A UNI 9795 (${daEsportare
+        .map((d) => d.clausola)
         .join(', ')}).`
     );
   };
@@ -372,6 +550,110 @@ export const ExportView: React.FC<ExportViewProps> = ({
               Dati Aperti (.JSON)
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* Documentazione di Progetto — Appendice A (Normativa UNI 9795) */}
+      <div className="rounded-lg border border-blue-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-blue-800">
+              <BookCheck className="h-5 w-5 shrink-0" />
+              <h2 className="text-base font-semibold text-slate-900">
+                Documentazione di Progetto — Appendice A (Normativa UNI 9795)
+              </h2>
+            </div>
+            <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+              Elaborati normativi per fase preliminare (<span className="font-mono">A.2</span>) e definitiva/esecutiva (<span className="font-mono">A.3.2 ÷ A.3.6</span>): scheda riassuntiva, registro elaborati, relazione con dimensionamento cavi e autonomie, schema a blocchi con matrice causa-effetto e schemi di alimentazione primaria e secondaria.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-xs">
+            <div className="flex items-center gap-2 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5">
+              <span className="font-medium text-slate-700">Formato relazioni/schede:</span>
+              <label className="inline-flex items-center gap-1 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={formatoAppendiceA === 'doc'}
+                  onChange={() => setFormatoAppendiceA('doc')}
+                />
+                DOC
+              </label>
+              <label className="inline-flex items-center gap-1 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={formatoAppendiceA === 'pdf'}
+                  onChange={() => setFormatoAppendiceA('pdf')}
+                />
+                PDF
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={toggleTuttiAppendiceA}
+              className="font-medium text-blue-700 hover:underline cursor-pointer whitespace-nowrap"
+            >
+              {tuttiAppendiceASelezionati ? 'Deseleziona tutti' : 'Seleziona tutti'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2.5 md:grid-cols-2">
+          {DOCUMENTI_APPENDICE_A.map((docItem) => (
+            <label
+              key={docItem.id}
+              className={`flex items-start gap-2.5 rounded border px-3 py-2.5 text-xs cursor-pointer transition-colors ${
+                appendiceASelezionati[docItem.id]
+                  ? 'border-blue-300 bg-blue-50/50 text-slate-900'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={appendiceASelezionati[docItem.id]}
+                onChange={(e) =>
+                  setAppendiceASelezionati((prev) => ({
+                    ...prev,
+                    [docItem.id]: e.target.checked,
+                  }))
+                }
+                className="mt-0.5 cursor-pointer"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-900">
+                    <span className="mr-1.5 font-mono text-blue-700">{docItem.clausola}</span>
+                    {docItem.titolo}
+                  </span>
+                  <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700">
+                    {docItem.formatoBadge}
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-600 leading-snug">
+                  {docItem.descrizione}
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <div className="mt-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+          <strong>Nota App. A.3.5 (Disegni di layout e schemi elettrici di impianto):</strong> gli schemi elettrici di quadro (Unifilare, Fronte Quadro, Morsettiera ed Elenco Cavi CEI 64-8) sono inclusi e selezionabili nella sezione <em>Elaborati Grafici CAD in Formato DXF</em> e nel <em>PDF Multi-Foglio</em> sopra.
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            Selezionati: <strong className="font-mono text-slate-800">{countAppendiceASelezionati}</strong> / {DOCUMENTI_APPENDICE_A.length} documenti
+          </div>
+          <button
+            type="button"
+            disabled={countAppendiceASelezionati === 0}
+            onClick={handleEsportaAppendiceASelezionati}
+            className="rounded-md bg-blue-700 px-5 py-2 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300 cursor-pointer whitespace-nowrap"
+          >
+            {countAppendiceASelezionati === 0
+              ? 'Seleziona almeno un documento Appendice A'
+              : `Scarica Documenti Appendice A Selezionati (${countAppendiceASelezionati})`}
+          </button>
         </div>
       </div>
 

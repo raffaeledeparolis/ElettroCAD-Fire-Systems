@@ -4,6 +4,8 @@ import {
   VERSIONE_REGOLE,
 } from '../data/rulesAndLibrary';
 import {
+  AmplificatoreEVAC,
+  LineaAltoparlantiEVAC,
   LineaUtenza,
   ProgettoAntincendio,
   RisultatoCalcoloCompleto,
@@ -17,7 +19,9 @@ import {
 } from '../types/elettrocad';
 
 const SEZIONI_STANDARD = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120];
+export const SEZIONI_EVAC_STANDARD = [1.0, 1.5, 2.5, 4, 6, 10, 16];
 const CALIBRI_INTERRUTTORI = [6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, 200, 250];
+const RHO_RAME_EVAC = 0.018; // Ohm*mm2/m conduttore in rame linee altoparlanti 100V/70V
 
 // Portate base I0 (A) a 30°C per cavi isolati EPR/XLPE (es. FG16OM16 / FTG18OM16) 2/3 conduttori caricati
 const PORTATA_BASE_I0: Record<number, { mono: number; tri: number }> = {
@@ -259,6 +263,75 @@ export function calcolaLinea(
   };
 }
 
+export function verificaLineaAltoparlantiEVAC(
+  ln: LineaAltoparlantiEVAC,
+  amp?: AmplificatoreEVAC
+): RisultatoCalcoloLineaEVAC {
+  const uLinea = ln.tensioneLineaV || 100;
+  const pW = Math.max(0, ln.potenzaTotaleAltoparlantiW || 0);
+  const lunghezzaM = Math.max(0, ln.lunghezzaM || 0);
+  const sezioneMm2 = Math.max(0.5, ln.sezioneMm2 || 1.5);
+  const sogliaMaxPct =
+    ln.cadutaTensioneMaxPct && ln.cadutaTensioneMaxPct > 0
+      ? ln.cadutaTensioneMaxPct
+      : 10.0;
+
+  const iLinea = pW / uLinea;
+  const impedenzaCaricoOhm = pW > 0 ? (uLinea * uLinea) / pW : 0;
+  const resistenzaCavoOhm = (2 * lunghezzaM * RHO_RAME_EVAC) / sezioneMm2;
+
+  const fattoreTopo = ln.topologia === 'anello' ? 0.5 : 1.0;
+  const distribuzione = ln.distribuzioneCarico ?? 'concentrato';
+  const fattoreDist =
+    distribuzione === 'distribuito' && ln.numeroAltoparlanti > 1 ? 0.5 : 1.0;
+  const fattoreComplessivo = fattoreTopo * fattoreDist;
+
+  const resistenzaEffettivaOhm = resistenzaCavoOhm * fattoreComplessivo;
+  const dvLinea = iLinea * resistenzaEffettivaOhm;
+  const dvPct = (dvLinea / uLinea) * 100;
+
+  const rapportoResiduo = Math.max(0.01, 1 - dvPct / 100);
+  const attenuazioneDb = 20 * Math.log10(1 / rapportoResiduo);
+  const perditaPotenzaPct = (1 - Math.pow(Math.max(0, 1 - dvPct / 100), 2)) * 100;
+
+  const denomLmax = 2 * RHO_RAME_EVAC * iLinea * fattoreComplessivo;
+  const lunghezzaMassimaAmmissibileM =
+    denomLmax > 0
+      ? Math.round(((sogliaMaxPct / 100) * uLinea * sezioneMm2) / denomLmax)
+      : 2000;
+
+  const sezioneMinimaConsigliataMm2 =
+    SEZIONI_EVAC_STANDARD.find((s) => {
+      const rCand = ((2 * lunghezzaM * RHO_RAME_EVAC) / s) * fattoreComplessivo;
+      const dvCandPct = ((iLinea * rCand) / uLinea) * 100;
+      return dvCandPct <= sogliaMaxPct;
+    }) ?? 16;
+
+  const conformeCadutaTensione = dvPct <= sogliaMaxPct;
+  const caricoPct =
+    amp && amp.potenzaNominaleW > 0 ? (pW / amp.potenzaNominaleW) * 100 : 0;
+
+  const formulaDettaglio = `I = ${pW}W / ${uLinea}V = ${iLinea.toFixed(2)} A · R_cavo = ${resistenzaCavoOhm.toFixed(2)} Ω (R_eff = ${resistenzaEffettivaOhm.toFixed(2)} Ω, ${ln.topologia}/${distribuzione}) · ΔV = ${dvLinea.toFixed(2)} V (${dvPct.toFixed(2)}% vs ≤${sogliaMaxPct.toFixed(1)}%) · Att. = ${attenuazioneDb.toFixed(2)} dB · L_max = ${lunghezzaMassimaAmmissibileM} m`;
+
+  return {
+    lineaId: ln.id,
+    correnteLineaA: Number(iLinea.toFixed(2)),
+    impedenzaCaricoOhm: Number(impedenzaCaricoOhm.toFixed(1)),
+    resistenzaCavoOhm: Number(resistenzaCavoOhm.toFixed(2)),
+    resistenzaEffettivaOhm: Number(resistenzaEffettivaOhm.toFixed(2)),
+    cadutaTensioneV: Number(dvLinea.toFixed(2)),
+    cadutaTensionePct: Number(dvPct.toFixed(2)),
+    sogliaMaxPct: Number(sogliaMaxPct.toFixed(1)),
+    attenuazioneDb: Number(attenuazioneDb.toFixed(2)),
+    perditaPotenzaPct: Number(perditaPotenzaPct.toFixed(2)),
+    lunghezzaMassimaAmmissibileM,
+    sezioneMinimaConsigliataMm2,
+    conformeCadutaTensione,
+    caricoAmplificatorePct: Number(caricoPct.toFixed(1)),
+    formulaDettaglio,
+  };
+}
+
 export function calcolaProgettoCompleto(
   progetto: ProgettoAntincendio
 ): RisultatoCalcoloCompleto {
@@ -336,23 +409,8 @@ export function calcolaProgettoCompleto(
   for (const sys of progetto.sistemiEvac) {
     const lineeRisultati: RisultatoCalcoloLineaEVAC[] = sys.lineeAltoparlanti.map(
       (ln) => {
-        const iLinea = ln.potenzaTotaleAltoparlantiW / ln.tensioneLineaV;
-        const rTot = (2 * ln.lunghezzaM * 0.018) / Math.max(0.5, ln.sezioneMm2);
-        const fattoreTopo = ln.topologia === 'anello' ? 0.5 : 1.0;
-        const dvLinea = iLinea * rTot * fattoreTopo;
-        const dvPct = (dvLinea / ln.tensioneLineaV) * 100;
         const amp = sys.amplificatori.find((a) => a.id === ln.amplificatoreId);
-        const caricoPct = amp
-          ? (ln.potenzaTotaleAltoparlantiW / amp.potenzaNominaleW) * 100
-          : 0;
-
-        return {
-          lineaId: ln.id,
-          correnteLineaA: Number(iLinea.toFixed(2)),
-          cadutaTensionePct: Number(dvPct.toFixed(2)),
-          caricoAmplificatorePct: Number(caricoPct.toFixed(1)),
-          formulaDettaglio: `I = ${ln.potenzaTotaleAltoparlantiW}W / ${ln.tensioneLineaV}V = ${iLinea.toFixed(2)} A · ΔV% = ${dvPct.toFixed(2)}% (${ln.topologia})`,
-        };
+        return verificaLineaAltoparlantiEVAC(ln, amp);
       }
     );
 

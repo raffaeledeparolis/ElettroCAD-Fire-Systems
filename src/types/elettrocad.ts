@@ -201,17 +201,21 @@ export interface AmplificatoreEVAC {
   diRiserva: boolean;
 }
 
+export type DistribuzioneCaricoEVAC = 'concentrato' | 'distribuito';
+
 export interface LineaAltoparlantiEVAC {
   id: string;
   sigla: string;
   zonaNome: string;
   topologia: 'radiale' | 'anello';
+  distribuzioneCarico?: DistribuzioneCaricoEVAC;
   tensioneLineaV: 100 | 70;
   numeroAltoparlanti: number;
   potenzaTotaleAltoparlantiW: number;
   lunghezzaM: number;
   sezioneMm2: number;
   resistenzaFuoco: ResistenzaFuocoCavo;
+  cadutaTensioneMaxPct?: number;
   amplificatoreId: string;
 }
 
@@ -358,7 +362,17 @@ export interface RisultatoCalcoloIRAI {
 export interface RisultatoCalcoloLineaEVAC {
   lineaId: string;
   correnteLineaA: number;
+  impedenzaCaricoOhm: number;
+  resistenzaCavoOhm: number;
+  resistenzaEffettivaOhm: number;
+  cadutaTensioneV: number;
   cadutaTensionePct: number;
+  sogliaMaxPct: number;
+  attenuazioneDb: number;
+  perditaPotenzaPct: number;
+  lunghezzaMassimaAmmissibileM: number;
+  sezioneMinimaConsigliataMm2: number;
+  conformeCadutaTensione: boolean;
   caricoAmplificatorePct: number;
   formulaDettaglio: string;
 }

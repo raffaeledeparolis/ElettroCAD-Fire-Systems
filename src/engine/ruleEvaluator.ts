@@ -373,20 +373,35 @@ export function valutaRegoleProgetto(
       `P_req = ${resEvac.potenzaTotaleAltoparlantiW} W × (1 + ${sys.marginePotenzaRichiestoPct}%) = ${resEvac.potenzaRichiestaConMargineW} W`
     );
 
-    const lineeEvacOk = resEvac.lineeRisultati.every((r) => r.cadutaTensionePct <= 10);
-    const batEvacOk = sys.capacitaBatterieInstallataAh >= resEvac.capacitaBatterieMinimaAh;
-    const maxDvEvac = Math.max(0, ...resEvac.lineeRisultati.map((r) => r.cadutaTensionePct));
+    // Verifica caduta di tensione percentuale su ciascuna linea altoparlanti EVAC
+    for (const ln of sys.lineeAltoparlanti) {
+      const rLn = resEvac.lineeRisultati.find((r) => r.lineaId === ln.id);
+      if (!rLn) continue;
+      pushEsito(
+        'reg-15',
+        `${sys.id}__${ln.id}`,
+        `${sys.sigla} · ${ln.sigla} (${ln.zonaNome})`,
+        rLn.conformeCadutaTensione ? 'conforme' : 'non_conforme',
+        `ΔV=${rLn.cadutaTensionePct.toFixed(2)}% (${rLn.cadutaTensioneV} V) · Att.=${rLn.attenuazioneDb} dB · L_max=${rLn.lunghezzaMassimaAmmissibileM} m`,
+        `ΔV <= ${rLn.sogliaMaxPct.toFixed(1)}% (S >= ${rLn.sezioneMinimaConsigliataMm2} mm²)`,
+        rLn.conformeCadutaTensione
+          ? `Caduta di tensione entro il limite (${rLn.cadutaTensionePct.toFixed(2)}% <= ${rLn.sogliaMaxPct.toFixed(1)}%) su ${ln.lunghezzaM} m con ${ln.potenzaTotaleAltoparlantiW} W.`
+          : `Caduta di tensione eccessiva (${rLn.cadutaTensionePct.toFixed(2)}% > ${rLn.sogliaMaxPct.toFixed(1)}%): aumentare sezione a >= ${rLn.sezioneMinimaConsigliataMm2} mm² o ridurre lunghezza <= ${rLn.lunghezzaMassimaAmmissibileM} m.`,
+        rLn.formulaDettaglio
+      );
+    }
 
+    const batEvacOk = sys.capacitaBatterieInstallataAh >= resEvac.capacitaBatterieMinimaAh;
     pushEsito(
       'reg-15',
       sys.id,
-      `${sys.sigla} (Linee 100V & Batterie)`,
-      lineeEvacOk && batEvacOk ? 'conforme' : 'non_conforme',
-      `Max ΔV linee: ${maxDvEvac.toFixed(2)}% · Batterie: ${sys.capacitaBatterieInstallataAh} Ah (min ${resEvac.capacitaBatterieMinimaAh} Ah)`,
-      'ΔV linee <= 10% e C_bat >= C_min',
-      lineeEvacOk && batEvacOk
-        ? 'Linee altoparlanti 100V e autonomia batterie EVAC conformi.'
-        : 'Caduta di tensione superiore al 10% su linea altoparlanti o batterie sottodimensionate.',
+      `${sys.sigla} (Batterie EVAC)`,
+      batEvacOk ? 'conforme' : 'non_conforme',
+      `Installata: ${sys.capacitaBatterieInstallataAh} Ah vs min ${resEvac.capacitaBatterieMinimaAh} Ah`,
+      `C_bat >= ${resEvac.capacitaBatterieMinimaAh} Ah`,
+      batEvacOk
+        ? 'Autonomia batterie EVAC (quiete + allarme) conforme.'
+        : 'Capacità batterie EVAC sottodimensionata rispetto all’autonomia richiesta.',
       resEvac.formulaBatterie
     );
 
