@@ -12,7 +12,9 @@ import {
   RisultatoCalcoloIRAI,
   SistemaIRAI,
   TemplateTavolaDXF,
+  VoceChecklistInputGenerata,
 } from '../types/elettrocad';
+import { CHECKLIST_INPUT_CATEGORIE } from './checklistInput';
 import { LINEE_PER_TAVOLA } from './dxfEngine';
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -2788,6 +2790,180 @@ export function esportaEvacUni11988_ElencoComponentiAcusticaXlsx(
     `${progetto.identificativi.commessa}_EVAC_UNI11988_Componenti_Acustica.xlsx`
   );
 }
+
+function escapeHtmlChecklist(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+export function esportaChecklistInputProgetto(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  voci: VoceChecklistInputGenerata[],
+  formato: 'doc' | 'pdf' = 'doc'
+) {
+  const totVoci = voci.length;
+  const acquisite = voci.filter((v) => v.acquisito).length;
+  const mancantiObbl = voci.filter((v) => !v.acquisito && v.obbligatorio).length;
+  const dataGen =
+    progetto.checklistInputDataGenerazione || new Date().toLocaleDateString('it-IT');
+
+  if (formato === 'pdf') {
+    const { doc, addHeading, addParagraph } = creaPdfAppendiceABuilder(
+      progetto,
+      calcolo,
+      'CHECK-LIST DATI DI INPUT PER SVILUPPO PROGETTO',
+      'Raccolta Dati Preliminari Commessa'
+    );
+
+    addHeading('Riepilogo Stato Acquisizione Dati di Input');
+    addParagraph(
+      `Data generazione: ${dataGen} | Voci totali: ${totVoci} | Acquisite/Disponibili: ${acquisite} | Da richiedere (obbligatorie): ${mancantiObbl}`,
+      true
+    );
+
+    CHECKLIST_INPUT_CATEGORIE.forEach((cat) => {
+      const catVoci = voci.filter((v) => v.categoria === cat.id);
+      if (catVoci.length === 0) return;
+
+      addHeading(`${cat.label} (${cat.normaRif})`);
+      catVoci.forEach((v) => {
+        const spunta = v.acquisito ? '[X] ACQUISITO' : '[ ] DA ACQUISIRE';
+        const obbl = v.obbligatorio ? 'Obbligatorio' : 'Opzionale';
+        addParagraph(
+          `${spunta} · ${v.codice} — ${v.voce} [${obbl} | Fonte: ${v.fonte}]`,
+          true,
+          8
+        );
+        addParagraph(`Requisito: ${v.dettaglio}`, false, 7.5, 18);
+        addParagraph(
+          `Rilevamento commessa (${v.statoAuto.toUpperCase()}): ${v.valoreAttuale}${v.nota ? ` | Note: ${v.nota}` : ''}`,
+          false,
+          7.5,
+          18
+        );
+      });
+    });
+
+    doc.save(`${progetto.identificativi.commessa}_Checklist_Dati_Input.pdf`);
+    return;
+  }
+
+  const sezioniHtml = CHECKLIST_INPUT_CATEGORIE.map((cat) => {
+    const catVoci = voci.filter((v) => v.categoria === cat.id);
+    if (catVoci.length === 0) return '';
+
+    const rows = catVoci
+      .map(
+        (v) => `
+      <tr>
+        <td style="text-align:center;font-weight:bold;width:36px;">${v.acquisito ? '&#9745;' : '&#9744;'}</td>
+        <td class="mono" style="width:68px;">${escapeHtmlChecklist(v.codice)}</td>
+        <td>
+          <strong>${escapeHtmlChecklist(v.voce)}</strong>
+          ${v.obbligatorio ? ' <span class="warn">(Obbl.)</span>' : ' <span>(Opz.)</span>'}<br/>
+          <span style="color:#475569;font-size:10.5px;">${escapeHtmlChecklist(v.dettaglio)}</span>
+        </td>
+        <td style="width:120px;">${escapeHtmlChecklist(v.fonte)}</td>
+        <td style="width:190px;">
+          <span class="${v.statoAuto === 'compilato' ? 'ok' : v.statoAuto === 'mancante' ? 'warn' : ''}">
+            ${v.statoAuto === 'compilato' ? 'Compilato' : v.statoAuto === 'parziale' ? 'Parziale' : 'Da acquisire'}
+          </span><br/>
+          <span style="font-size:10.5px;">${escapeHtmlChecklist(v.valoreAttuale)}</span>
+        </td>
+        <td style="width:130px;">${escapeHtmlChecklist(v.nota || '')}</td>
+      </tr>`
+      )
+      .join('');
+
+    return `
+      <h2>${escapeHtmlChecklist(cat.label)} <span style="font-size:10.5px;color:#475569;font-weight:normal;">(${escapeHtmlChecklist(cat.normaRif)})</span></h2>
+      <table>
+        <thead>
+          <tr>
+            <th>OK</th>
+            <th>Codice</th>
+            <th>Informazione / Documento Richiesto in Input</th>
+            <th>Fonte / Referente</th>
+            <th>Stato Commessa</th>
+            <th>Note / Rif. Allegato</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }).join('');
+
+  const body = `
+    <h1>CHECK-LIST DATI DI INPUT PER SVILUPPO PROGETTO</h1>
+    <div class="meta">
+      <strong>Commessa:</strong> ${escapeHtmlChecklist(progetto.identificativi.commessa)} &nbsp;|&nbsp;
+      <strong>Cliente:</strong> ${escapeHtmlChecklist(progetto.identificativi.cliente)} &nbsp;|&nbsp;
+      <strong>Sito:</strong> ${escapeHtmlChecklist(progetto.identificativi.sito)}<br/>
+      <strong>Progettista:</strong> ${escapeHtmlChecklist(progetto.identificativi.progettista)} &nbsp;|&nbsp;
+      <strong>Attività:</strong> ${escapeHtmlChecklist(progetto.attivitaNome)} (LP ${escapeHtmlChecklist(progetto.livelloPrestazione)}) &nbsp;|&nbsp;
+      <strong>Data Check-list:</strong> ${escapeHtmlChecklist(dataGen)}<br/>
+      <strong>Avanzamento Input:</strong> ${acquisite}/${totVoci} acquisiti · <span class="${mancantiObbl > 0 ? 'warn' : 'ok'}">${mancantiObbl} dati obbligatori mancanti</span>
+    </div>
+    ${sezioniHtml}
+  `;
+
+  downloadBlob(
+    new Blob(
+      [buildAppendiceAHtmlShell('Check-list Dati di Input Progetto', progetto.identificativi.commessa, body)],
+      { type: 'application/msword;charset=utf-8' }
+    ),
+    `${progetto.identificativi.commessa}_Checklist_Dati_Input.doc`
+  );
+}
+
+export function esportaChecklistInputXlsx(
+  progetto: ProgettoAntincendio,
+  voci: VoceChecklistInputGenerata[]
+) {
+  const wb = XLSX.utils.book_new();
+  const dataGen =
+    progetto.checklistInputDataGenerazione || new Date().toLocaleDateString('it-IT');
+
+  const riepilogo = [
+    { Campo: 'Commessa', Valore: progetto.identificativi.commessa },
+    { Campo: 'Cliente', Valore: progetto.identificativi.cliente },
+    { Campo: 'Sito', Valore: progetto.identificativi.sito },
+    { Campo: 'Progettista', Valore: progetto.identificativi.progettista },
+    { Campo: 'Attività / Livello Prestazione', Valore: `${progetto.attivitaNome} (${progetto.livelloPrestazione})` },
+    { Campo: 'Data Generazione Check-list', Valore: dataGen },
+    { Campo: 'Totale Voci Input', Valore: String(voci.length) },
+    { Campo: 'Voci Acquisite', Valore: String(voci.filter((v) => v.acquisito).length) },
+    { Campo: 'Voci Obbligatorie Mancanti', Valore: String(voci.filter((v) => !v.acquisito && v.obbligatorio).length) },
+  ];
+
+  const righe = voci.map((v) => ({
+    Acquisito: v.acquisito ? 'SÌ' : 'NO',
+    Codice: v.codice,
+    Categoria: v.categoriaLabel,
+    Obbligatorio: v.obbligatorio ? 'Sì' : 'Opzionale',
+    Dato_Richiesto: v.voce,
+    Dettaglio_Tecnico: v.dettaglio,
+    Fonte_Referente: v.fonte,
+    Stato_Auto_Commessa:
+      v.statoAuto === 'compilato' ? 'Compilato' : v.statoAuto === 'parziale' ? 'Parziale' : 'Mancante',
+    Valore_Rilevato: v.valoreAttuale,
+    Note_Riferimenti: v.nota || '',
+  }));
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(riepilogo), 'Riepilogo Commessa');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(righe), 'Check-list Dati Input');
+
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  downloadBlob(
+    new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    `${progetto.identificativi.commessa}_Checklist_Dati_Input.xlsx`
+  );
+}
+
 
 
 

@@ -300,6 +300,45 @@ export interface AnnotazioneSchema {
   testo: string;
 }
 
+export type ChecklistInputCategoriaId =
+  | 'anagrafica_antincendio'
+  | 'fornitura_terra'
+  | 'ambiente_posa'
+  | 'quadro_utenze'
+  | 'irai_rivelazione'
+  | 'evac_vocale'
+  | 'documenti_base';
+
+export interface VoceChecklistInputCustom {
+  id: string;
+  categoria: ChecklistInputCategoriaId;
+  voce: string;
+  dettaglio: string;
+  fonte: string;
+  obbligatorio: boolean;
+}
+
+export interface StatoVoceChecklistInput {
+  acquisito: boolean;
+  nota?: string;
+}
+
+export interface VoceChecklistInputGenerata {
+  id: string;
+  categoria: ChecklistInputCategoriaId;
+  categoriaLabel: string;
+  codice: string;
+  voce: string;
+  dettaglio: string;
+  fonte: string;
+  obbligatorio: boolean;
+  statoAuto: 'compilato' | 'parziale' | 'mancante';
+  valoreAttuale: string;
+  acquisito: boolean;
+  nota: string;
+  custom?: boolean;
+}
+
 export interface ProgettoAntincendio {
   id: string;
   archiviato: boolean;
@@ -322,6 +361,9 @@ export interface ProgettoAntincendio {
   templateIdAssociato: string;
   layoutOverrides: Record<string, LayoutNodeOverride>;
   annotazioni: AnnotazioneSchema[];
+  checklistInputStato?: Record<string, StatoVoceChecklistInput>;
+  checklistInputCustom?: VoceChecklistInputCustom[];
+  checklistInputDataGenerazione?: string;
 }
 
 export interface RisultatoCalcoloLinea {

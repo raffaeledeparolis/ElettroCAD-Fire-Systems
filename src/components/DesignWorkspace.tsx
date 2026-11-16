@@ -3,23 +3,34 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
+  ClipboardList,
   Copy,
   FileSpreadsheet,
+  FileText,
   HelpCircle,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   Printer,
+  RefreshCw,
+  Search,
   Trash2,
   XCircle,
 } from 'lucide-react';
 import { ANAGRAFICA_COMPONENTI_IRAI_DEFAULT } from '../data/rulesAndLibrary';
 import { SEZIONI_EVAC_STANDARD } from '../engine/calculator';
 import {
+  CHECKLIST_INPUT_CATEGORIE,
+  generaChecklistDatiInput,
+} from '../engine/checklistInput';
+import {
+  esportaChecklistInputProgetto,
+  esportaChecklistInputXlsx,
   esportaExcelRiepilogoSistemaIrai,
   esportaPdfRiepilogoSistemaIrai,
 } from '../engine/exporters';
 import {
+  ChecklistInputCategoriaId,
   ClasseCPR,
   ComponenteAnagraficaIRAI,
   CurvaIntervento,
@@ -51,6 +62,7 @@ import { SezioneApp } from './TopBar';
 type NodoAlbero =
   | { tipo: 'generali' }
   | { tipo: 'sorgenti_quadri' }
+  | { tipo: 'checklist_input' }
   | { tipo: 'linee'; lineaId?: string }
   | { tipo: 'irai'; sistemaId: string }
   | { tipo: 'evac'; sistemaId: string };
@@ -109,6 +121,18 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
   const [nuovoCompIq, setNuovoCompIq] = useState(0.35);
   const [nuovoCompIa, setNuovoCompIa] = useState(5.5);
   const [nuovoCompDescrizione, setNuovoCompDescrizione] = useState('');
+  const [clIncludiIrai, setClIncludiIrai] = useState(true);
+  const [clIncludiEvac, setClIncludiEvac] = useState(true);
+  const [clSoloMancanti, setClSoloMancanti] = useState(false);
+  const [clCategoriaFiltro, setClCategoriaFiltro] = useState<
+    'tutte' | ChecklistInputCategoriaId
+  >('tutte');
+  const [clRicerca, setClRicerca] = useState('');
+  const [clCustomCat, setClCustomCat] = useState<ChecklistInputCategoriaId>('documenti_base');
+  const [clCustomVoce, setClCustomVoce] = useState('');
+  const [clCustomDettaglio, setClCustomDettaglio] = useState('');
+  const [clCustomFonte, setClCustomFonte] = useState('Committente');
+  const [clCustomObbl, setClCustomObbl] = useState(true);
 
   const PRESET_DISPOSITIVI_IRAI: Record<
     DispositivoIRAI['tipo'],
@@ -522,6 +546,14 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
       ? progetto.sistemiEvac.find((s) => s.id === nodoAttivo.sistemaId)
       : undefined;
 
+  const vociChecklistInput = generaChecklistDatiInput(progetto, esiti, {
+    includiIrai: clIncludiIrai,
+    includiEvac: clIncludiEvac,
+  });
+  const vociChecklistMancantiObbl = vociChecklistInput.filter(
+    (v) => !v.acquisito && v.obbligatorio
+  ).length;
+
   return (
     <div className="flex min-h-[calc(100vh-58px)] flex-col lg:flex-row">
       {/* Sidebar Sinistra: Albero Progetto (RF-02) */}
@@ -566,6 +598,30 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
             >
               <span>Sorgenti, UPS & Quadro</span>
               <ChevronRight className="h-3.5 w-3.5 opacity-60" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setNodoAttivo({ tipo: 'checklist_input' })}
+              className={`flex w-full items-center justify-between rounded px-2.5 py-1.5 text-left cursor-pointer ${
+                nodoAttivo.tipo === 'checklist_input'
+                  ? 'bg-blue-50 font-semibold text-blue-800'
+                  : 'text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <ClipboardList className="h-3.5 w-3.5 opacity-75" />
+                <span>Check-list Dati Input</span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                {vociChecklistMancantiObbl > 0 ? (
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-800">
+                    {vociChecklistMancantiObbl}
+                  </span>
+                ) : (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                )}
+                <ChevronRight className="h-3.5 w-3.5 opacity-60" />
+              </span>
             </button>
           </div>
 
@@ -1062,6 +1118,422 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                         </label>
                       </div>
                     </label>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {nodoAttivo.tipo === 'checklist_input' && (
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-slate-900">
+                      Check-list Dati di Input per Sviluppo Progetto
+                    </h2>
+                    <p className="mt-0.5 text-xs text-slate-600">
+                      Elenco strutturato di tutte le informazioni tecniche, normative e documentali necessarie in ingresso per sviluppare la progettazione elettrica, IRAI ed EVAC.
+                      {progetto.checklistInputDataGenerazione && (
+                        <span className="ml-2 font-mono text-slate-500">
+                          (Generata il {progetto.checklistInputDataGenerazione})
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const oggi = new Date().toLocaleDateString('it-IT');
+                        onAggiornaProgetto(
+                          (p) => {
+                            const nextStato = { ...(p.checklistInputStato ?? {}) };
+                            vociChecklistInput.forEach((v) => {
+                              if (v.statoAuto === 'compilato') {
+                                nextStato[v.id] = {
+                                  acquisito: true,
+                                  nota: nextStato[v.id]?.nota ?? '',
+                                };
+                              }
+                            });
+                            return {
+                              ...p,
+                              checklistInputStato: nextStato,
+                              checklistInputDataGenerazione: oggi,
+                            };
+                          },
+                          {
+                            sezione: 'Check-list Input',
+                            campo: 'Generazione da commessa',
+                            prevVal: progetto.checklistInputDataGenerazione ?? '-',
+                            newVal: oggi,
+                          }
+                        );
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded bg-blue-700 px-3 py-1.5 font-medium text-white hover:bg-blue-800 cursor-pointer"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Genera / Sincronizza da Commessa
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        esportaChecklistInputProgetto(progetto, calcolo, vociChecklistInput, 'pdf')
+                      }
+                      className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <Printer className="h-3.5 w-3.5 text-red-700" />
+                      Esporta PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        esportaChecklistInputProgetto(progetto, calcolo, vociChecklistInput, 'doc')
+                      }
+                      className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <FileText className="h-3.5 w-3.5 text-blue-700" />
+                      Word (.doc)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => esportaChecklistInputXlsx(progetto, vociChecklistInput)}
+                      className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 py-1.5 font-medium text-slate-800 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                      Excel (.xlsx)
+                    </button>
+                  </div>
+                </div>
+
+                {/* KPI Avanzamento Input */}
+                <div className="grid gap-3 sm:grid-cols-4 text-xs">
+                  <div className="rounded border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-slate-500">Totale Dati Input</div>
+                    <div className="mt-1 font-mono text-lg font-semibold text-slate-900">
+                      {vociChecklistInput.length}
+                    </div>
+                  </div>
+                  <div className="rounded border border-emerald-200 bg-emerald-50 p-3">
+                    <div className="text-emerald-800">Acquisiti / Disponibili</div>
+                    <div className="mt-1 font-mono text-lg font-semibold text-emerald-900">
+                      {vociChecklistInput.filter((v) => v.acquisito).length} /{' '}
+                      {vociChecklistInput.length}
+                    </div>
+                  </div>
+                  <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                    <div className="text-amber-800">Parziali in Commessa</div>
+                    <div className="mt-1 font-mono text-lg font-semibold text-amber-900">
+                      {vociChecklistInput.filter((v) => v.statoAuto === 'parziale').length}
+                    </div>
+                  </div>
+                  <div className="rounded border border-red-200 bg-red-50 p-3">
+                    <div className="text-red-800">Obbligatori Da Acquisire</div>
+                    <div className="mt-1 font-mono text-lg font-semibold text-red-900">
+                      {vociChecklistMancantiObbl}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filtri e Scope */}
+                <div className="flex flex-wrap items-center gap-3 rounded border border-slate-200 bg-slate-50 p-3 text-xs">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      value={clRicerca}
+                      onChange={(e) => setClRicerca(e.target.value)}
+                      placeholder="Cerca voce, codice o fonte (es. Icc, RT60, planimetria)..."
+                      className="w-full rounded border border-slate-300 bg-white pl-8 pr-2.5 py-1.5 text-slate-900"
+                    />
+                  </div>
+                  <select
+                    value={clCategoriaFiltro}
+                    onChange={(e) =>
+                      setClCategoriaFiltro(
+                        e.target.value as 'tutte' | ChecklistInputCategoriaId
+                      )
+                    }
+                    className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-slate-900"
+                  >
+                    <option value="tutte">Tutte le categorie</option>
+                    {CHECKLIST_INPUT_CATEGORIE.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="inline-flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={clIncludiIrai}
+                      onChange={(e) => setClIncludiIrai(e.target.checked)}
+                    />
+                    Includi IRAI
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={clIncludiEvac}
+                      onChange={(e) => setClIncludiEvac(e.target.checked)}
+                    />
+                    Includi EVAC
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 font-medium text-amber-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={clSoloMancanti}
+                      onChange={(e) => setClSoloMancanti(e.target.checked)}
+                    />
+                    Solo da acquisire
+                  </label>
+                </div>
+
+                {/* Elenco per Categoria */}
+                <div className="space-y-4">
+                  {CHECKLIST_INPUT_CATEGORIE.filter(
+                    (cat) => clCategoriaFiltro === 'tutte' || clCategoriaFiltro === cat.id
+                  ).map((cat) => {
+                    const q = clRicerca.trim().toLowerCase();
+                    const catVoci = vociChecklistInput.filter((v) => {
+                      if (v.categoria !== cat.id) return false;
+                      if (clSoloMancanti && v.acquisito) return false;
+                      if (
+                        q &&
+                        !v.voce.toLowerCase().includes(q) &&
+                        !v.dettaglio.toLowerCase().includes(q) &&
+                        !v.codice.toLowerCase().includes(q) &&
+                        !v.fonte.toLowerCase().includes(q)
+                      ) {
+                        return false;
+                      }
+                      return true;
+                    });
+                    if (catVoci.length === 0) return null;
+
+                    return (
+                      <div
+                        key={cat.id}
+                        className="overflow-hidden rounded border border-slate-200 bg-white"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-100 px-3.5 py-2 text-xs">
+                          <div>
+                            <span className="font-semibold text-slate-900">{cat.label}</span>
+                            <span className="ml-2 text-slate-500">({cat.normaRif})</span>
+                          </div>
+                          <span className="font-mono text-[11px] text-slate-600">
+                            {catVoci.filter((v) => v.acquisito).length}/{catVoci.length} acquisiti
+                          </span>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] text-slate-600">
+                                <th className="w-10 px-2.5 py-2 text-center">OK</th>
+                                <th className="w-20 px-2.5 py-2">Codice</th>
+                                <th className="px-2.5 py-2">Dato / Elaborato Richiesto</th>
+                                <th className="w-36 px-2.5 py-2">Fonte</th>
+                                <th className="w-60 px-2.5 py-2">Rilevamento Commessa</th>
+                                <th className="w-48 px-2.5 py-2">Note / Rif. Allegato</th>
+                                <th className="w-8 px-1.5 py-2"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {catVoci.map((v) => (
+                                <tr
+                                  key={v.id}
+                                  className={v.acquisito ? 'bg-emerald-50/20' : 'bg-white'}
+                                >
+                                  <td className="px-2.5 py-2 text-center align-top">
+                                    <input
+                                      type="checkbox"
+                                      checked={v.acquisito}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        onAggiornaProgetto((p) => ({
+                                          ...p,
+                                          checklistInputStato: {
+                                            ...(p.checklistInputStato ?? {}),
+                                            [v.id]: {
+                                              acquisito: checked,
+                                              nota: p.checklistInputStato?.[v.id]?.nota ?? v.nota,
+                                            },
+                                          },
+                                        }));
+                                      }}
+                                      className="mt-0.5 h-4 w-4 cursor-pointer accent-blue-700"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-2 align-top font-mono text-[11px] font-semibold text-slate-700">
+                                    {v.codice}
+                                    {v.obbligatorio ? (
+                                      <span className="mt-0.5 block text-[10px] font-normal text-red-700">
+                                        Obbligatorio
+                                      </span>
+                                    ) : (
+                                      <span className="mt-0.5 block text-[10px] font-normal text-slate-500">
+                                        Opzionale
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-2.5 py-2 align-top">
+                                    <div className="font-semibold text-slate-900">{v.voce}</div>
+                                    <div className="mt-0.5 text-[11px] text-slate-600">
+                                      {v.dettaglio}
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-2 align-top text-[11px] text-slate-700">
+                                    {v.fonte}
+                                  </td>
+                                  <td className="px-2.5 py-2 align-top">
+                                    <span
+                                      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                        v.statoAuto === 'compilato'
+                                          ? 'bg-emerald-100 text-emerald-800'
+                                          : v.statoAuto === 'parziale'
+                                            ? 'bg-amber-100 text-amber-800'
+                                            : 'bg-red-100 text-red-800'
+                                      }`}
+                                    >
+                                      {v.statoAuto === 'compilato'
+                                        ? 'Compilato'
+                                        : v.statoAuto === 'parziale'
+                                          ? 'Parziale'
+                                          : 'Da acquisire'}
+                                    </span>
+                                    <div className="mt-1 text-[11px] text-slate-700">
+                                      {v.valoreAttuale}
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-2 align-top">
+                                    <input
+                                      type="text"
+                                      value={v.nota}
+                                      placeholder="Rif. email / file..."
+                                      onChange={(e) => {
+                                        const txt = e.target.value;
+                                        onAggiornaProgetto((p) => ({
+                                          ...p,
+                                          checklistInputStato: {
+                                            ...(p.checklistInputStato ?? {}),
+                                            [v.id]: {
+                                              acquisito:
+                                                p.checklistInputStato?.[v.id]?.acquisito ??
+                                                v.acquisito,
+                                              nota: txt,
+                                            },
+                                          },
+                                        }));
+                                      }}
+                                      className="w-full rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-900"
+                                    />
+                                  </td>
+                                  <td className="px-1.5 py-2 align-top text-center">
+                                    {v.custom && (
+                                      <button
+                                        type="button"
+                                        title="Elimina voce personalizzata"
+                                        onClick={() =>
+                                          onAggiornaProgetto((p) => ({
+                                            ...p,
+                                            checklistInputCustom: (
+                                              p.checklistInputCustom ?? []
+                                            ).filter((c) => c.id !== v.id),
+                                          }))
+                                        }
+                                        className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-700 cursor-pointer"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Aggiungi Voce Custom alla Check-list */}
+                <div className="rounded border border-slate-200 bg-slate-50 p-4 text-xs">
+                  <div className="mb-2.5 font-semibold text-slate-900">
+                    Aggiungi Voce Input Personalizzata di Commessa
+                  </div>
+                  <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5">
+                    <select
+                      value={clCustomCat}
+                      onChange={(e) =>
+                        setClCustomCat(e.target.value as ChecklistInputCategoriaId)
+                      }
+                      className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-slate-900"
+                    >
+                      {CHECKLIST_INPUT_CATEGORIE.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={clCustomVoce}
+                      onChange={(e) => setClCustomVoce(e.target.value)}
+                      placeholder="Titolo dato richiesto (es. Portata idranti)"
+                      className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-slate-900"
+                    />
+                    <input
+                      type="text"
+                      value={clCustomDettaglio}
+                      onChange={(e) => setClCustomDettaglio(e.target.value)}
+                      placeholder="Dettaglio tecnico / specifica"
+                      className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-slate-900"
+                    />
+                    <input
+                      type="text"
+                      value={clCustomFonte}
+                      onChange={(e) => setClCustomFonte(e.target.value)}
+                      placeholder="Fonte / Referente"
+                      className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-slate-900"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="inline-flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={clCustomObbl}
+                          onChange={(e) => setClCustomObbl(e.target.checked)}
+                        />
+                        Obbl.
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!clCustomVoce.trim()}
+                        onClick={() => {
+                          if (!clCustomVoce.trim()) return;
+                          const nuova = {
+                            id: `cl-custom-${Date.now()}`,
+                            categoria: clCustomCat,
+                            voce: clCustomVoce.trim(),
+                            dettaglio:
+                              clCustomDettaglio.trim() ||
+                              'Dato integrativo specifico richiesto per la commessa.',
+                            fonte: clCustomFonte.trim() || 'Committente',
+                            obbligatorio: clCustomObbl,
+                          };
+                          onAggiornaProgetto((p) => ({
+                            ...p,
+                            checklistInputCustom: [...(p.checklistInputCustom ?? []), nuova],
+                          }));
+                          setClCustomVoce('');
+                          setClCustomDettaglio('');
+                        }}
+                        className="inline-flex items-center gap-1 rounded bg-slate-800 px-3 py-1.5 font-medium text-white hover:bg-slate-900 disabled:opacity-40 cursor-pointer"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Aggiungi
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
