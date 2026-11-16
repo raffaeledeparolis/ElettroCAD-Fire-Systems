@@ -6,11 +6,14 @@ import {
   FileText,
   Printer,
   ShieldAlert,
+  Volume2,
 } from 'lucide-react';
 import { AVVISO_RESPONSABILITA_LEGALE } from '../data/rulesAndLibrary';
 import {
   generaDxfAlimentazioni,
   generaDxfElencoCavi,
+  generaDxfEvacAlimentazioni,
+  generaDxfEvacSchemaBlocchi,
   generaDxfFronteQuadro,
   generaDxfMorsettiera,
   generaDxfSchema,
@@ -23,6 +26,9 @@ import {
   esportaAppendiceA_SchedaRiassuntivaA32,
   esportaComputoXlsx,
   esportaDxfDocumento,
+  esportaEvacUni11988_ElencoComponentiAcusticaXlsx,
+  esportaEvacUni11988_RelazioneTecnicaA33,
+  esportaEvacUni11988_SchedaRiassuntivaA32,
   esportaExcelRiepilogoSistemaIrai,
   esportaJsonProgetto,
   esportaPdfMultiFoglio,
@@ -51,6 +57,7 @@ export const ExportView: React.FC<ExportViewProps> = ({
 }) => {
   const [formatoPdf, setFormatoPdf] = useState<'A3' | 'A4'>('A3');
   const [formatoAppendiceA, setFormatoAppendiceA] = useState<'doc' | 'pdf'>('doc');
+  const [formatoEvacUni11988, setFormatoEvacUni11988] = useState<'doc' | 'pdf'>('doc');
   const [ultimoExport, setUltimoExport] = useState<string | null>(null);
 
   const nonConformi = esiti.filter((e) => e.stato === 'non_conforme').length;
@@ -316,6 +323,155 @@ export const ExportView: React.FC<ExportViewProps> = ({
         .join(', ')}).`
     );
   };
+
+  type TipoDocEvacUni11988 =
+    | 'evac_a32_scheda'
+    | 'evac_a33_relazione'
+    | 'evac_a32_xlsx'
+    | 'evac_a34_blocchi_dxf'
+    | 'evac_a36_alim_dxf';
+
+  const [evacDocSelezionati, setEvacDocSelezionati] = useState<
+    Record<TipoDocEvacUni11988, boolean>
+  >({
+    evac_a32_scheda: true,
+    evac_a33_relazione: true,
+    evac_a32_xlsx: true,
+    evac_a34_blocchi_dxf: true,
+    evac_a36_alim_dxf: true,
+  });
+
+  const DOCUMENTI_EVAC_UNI11988: Array<{
+    id: TipoDocEvacUni11988;
+    clausola: string;
+    titolo: string;
+    descrizione: string;
+    formatoBadge: string;
+  }> = [
+    {
+      id: 'evac_a32_scheda',
+      clausola: 'App. A.3.2',
+      titolo: 'Scheda Riassuntiva Impianto EVAC & VACIE (Punti a ÷ i)',
+      descrizione:
+        'Anagrafica progetto/progettista, registro elaborati EVAC, modelli e riferimenti VACIE, dichiarazione conformità UNI 11988:2025 o scostamenti ed elenco componenti.',
+      formatoBadge: formatoEvacUni11988.toUpperCase(),
+    },
+    {
+      id: 'evac_a33_relazione',
+      clausola: 'App. A.3.3',
+      titolo: 'Relazione Tecnica, Relazione Acustica ADA (125 Hz–8 kHz) & Cavi',
+      descrizione:
+        'Zone allarme vocale e ADA, microfoni di emergenza, piano gestione emergenze, RT60 e rumore ambientale per ottave (Prospetto 24 UNI 9795:2021), potenza diffusori/amplificatori, autonomie, dimensionamento cavi, cavi ammessi e checklist layout A.3.5.',
+      formatoBadge: formatoEvacUni11988.toUpperCase(),
+    },
+    {
+      id: 'evac_a32_xlsx',
+      clausola: 'App. A.3.2-i',
+      titolo: 'Elenco Componenti EVAC, Potenze Diffusori & Matrice Acustica ADA',
+      descrizione:
+        'Cartella Excel multi-scheda: Registro elaborati, VACIE e amplificatori, Diffusori e linee 100V/70V, Bande ottava RT60/rumore ADA, Autonomie, Causa-Effetto IRAI-EVAC e Conformità.',
+      formatoBadge: 'XLSX',
+    },
+    {
+      id: 'evac_a34_blocchi_dxf',
+      clausola: 'App. A.3.4',
+      titolo: 'Schema a Blocchi EVAC & Tabella Causa-Effetto Integrata IRAI-EVAC',
+      descrizione:
+        'Tavola CAD con apparati VACIE, microfoni emergenza, amplificatori attivi/riserva N+1, linee/ADA 100V e schema funzionale causa-effetto integrato con IRAI.',
+      formatoBadge: 'DXF R2000',
+    },
+    {
+      id: 'evac_a36_alim_dxf',
+      clausola: 'App. A.3.6',
+      titolo: 'Schemi Alimentazione Primaria (A.3.6.1) e Secondaria (A.3.6.2) VACIE',
+      descrizione:
+        'Origine alimentazione primaria a monte I.G., sezionamenti, protezioni dedicate verso VACIE, modalità alimentazione secondaria a batterie EN 54-4 e legenda simboli.',
+      formatoBadge: 'DXF R2000',
+    },
+  ];
+
+  const countEvacDocSelezionati = DOCUMENTI_EVAC_UNI11988.filter(
+    (d) => evacDocSelezionati[d.id]
+  ).length;
+  const tuttiEvacDocSelezionati =
+    countEvacDocSelezionati === DOCUMENTI_EVAC_UNI11988.length;
+
+  const toggleTuttiEvacDoc = () => {
+    const nextVal = !tuttiEvacDocSelezionati;
+    setEvacDocSelezionati({
+      evac_a32_scheda: nextVal,
+      evac_a33_relazione: nextVal,
+      evac_a32_xlsx: nextVal,
+      evac_a34_blocchi_dxf: nextVal,
+      evac_a36_alim_dxf: nextVal,
+    });
+  };
+
+  const handleEsportaEvacUni11988Selezionati = () => {
+    const daEsportare = DOCUMENTI_EVAC_UNI11988.filter(
+      (d) => evacDocSelezionati[d.id]
+    );
+    if (daEsportare.length === 0) return;
+
+    daEsportare.forEach((docItem, idx) => {
+      const esegui = () => {
+        if (docItem.id === 'evac_a32_scheda') {
+          esportaEvacUni11988_SchedaRiassuntivaA32(
+            progetto,
+            calcolo,
+            esiti,
+            formatoEvacUni11988
+          );
+        } else if (docItem.id === 'evac_a33_relazione') {
+          esportaEvacUni11988_RelazioneTecnicaA33(
+            progetto,
+            calcolo,
+            esiti,
+            formatoEvacUni11988
+          );
+        } else if (docItem.id === 'evac_a32_xlsx') {
+          esportaEvacUni11988_ElencoComponentiAcusticaXlsx(progetto, calcolo, esiti);
+        } else if (docItem.id === 'evac_a34_blocchi_dxf') {
+          const dxf = generaDxfEvacSchemaBlocchi(progetto, calcolo, template);
+          esportaDxfDocumento(dxf, progetto.identificativi.commessa, 'EVAC_Schema_Blocchi_A34');
+        } else {
+          const dxf = generaDxfEvacAlimentazioni(progetto, calcolo, template);
+          esportaDxfDocumento(dxf, progetto.identificativi.commessa, 'EVAC_Alimentazioni_A36');
+        }
+      };
+
+      if (idx === 0) {
+        esegui();
+      } else {
+        window.setTimeout(esegui, idx * 200);
+      }
+    });
+
+    setUltimoExport(
+      `Esportati ${daEsportare.length} documenti EVAC conformi UNI 11988:2025 (${daEsportare
+        .map((d) => d.clausola)
+        .join(', ')}).`
+    );
+  };
+
+  const totAmplificatoriEvac = progetto.sistemiEvac.reduce(
+    (acc, s) => acc + s.amplificatori.length,
+    0
+  );
+  const totLineeEvac = progetto.sistemiEvac.reduce(
+    (acc, s) => acc + s.lineeAltoparlanti.length,
+    0
+  );
+  const totDiffusoriEvac = progetto.sistemiEvac.reduce(
+    (acc, s) =>
+      acc + s.lineeAltoparlanti.reduce((a, l) => a + l.numeroAltoparlanti, 0),
+    0
+  );
+  const totWattEvac = progetto.sistemiEvac.reduce(
+    (acc, s) =>
+      acc + s.lineeAltoparlanti.reduce((a, l) => a + l.potenzaTotaleAltoparlantiW, 0),
+    0
+  );
 
   const handlePdf = () => {
     esportaPdfMultiFoglio(progetto, calcolo, esiti, template, formatoPdf);
@@ -657,6 +813,134 @@ export const ExportView: React.FC<ExportViewProps> = ({
         </div>
       </div>
 
+      {/* Documentazione EVAC — Normativa UNI 11988:2025 (Appendice A) */}
+      <div className="rounded-lg border border-indigo-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-indigo-800">
+              <Volume2 className="h-5 w-5 shrink-0" />
+              <h2 className="text-base font-semibold text-slate-900">
+                Documentazione Impianto EVAC — Normativa UNI 11988:2025 (Appendice A)
+              </h2>
+            </div>
+            <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+              Fascicolo specialistico per sistemi di allarme vocale per scopi di emergenza secondo <span className="font-mono">UNI 11988:2025 App. A.3.1 ÷ A.3.6</span>: scheda riassuntiva VACIE, relazione tecnico-acustica per ADA in bande di ottava <span className="font-mono">125 Hz – 8 kHz</span>, dimensionamento diffusori/amplificatori/cavi, schema a blocchi con tabella causa-effetto integrata e schemi alimentazione primaria/secondaria.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-xs">
+            <div className="flex items-center gap-2 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5">
+              <span className="font-medium text-slate-700">Formato relazioni/schede:</span>
+              <label className="inline-flex items-center gap-1 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={formatoEvacUni11988 === 'doc'}
+                  onChange={() => setFormatoEvacUni11988('doc')}
+                />
+                DOC
+              </label>
+              <label className="inline-flex items-center gap-1 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={formatoEvacUni11988 === 'pdf'}
+                  onChange={() => setFormatoEvacUni11988('pdf')}
+                />
+                PDF
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={toggleTuttiEvacDoc}
+              className="font-medium text-indigo-700 hover:underline cursor-pointer whitespace-nowrap"
+            >
+              {tuttiEvacDocSelezionati ? 'Deseleziona tutti' : 'Seleziona tutti'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-[11px] text-slate-700">
+          {progetto.sistemiEvac.length === 0 ? (
+            <span>Nessun sistema EVAC/VACIE configurato nel progetto corrente.</span>
+          ) : (
+            <>
+              <span>
+                Sistemi VACIE: <strong className="font-mono text-indigo-900">{progetto.sistemiEvac.length}</strong>
+              </span>
+              <span>·</span>
+              <span>
+                Amplificatori: <strong className="font-mono text-indigo-900">{totAmplificatoriEvac}</strong>
+              </span>
+              <span>·</span>
+              <span>
+                Linee / ADA: <strong className="font-mono text-indigo-900">{totLineeEvac}</strong>
+              </span>
+              <span>·</span>
+              <span>
+                Diffusori EN 54-24: <strong className="font-mono text-indigo-900">{totDiffusoriEvac}</strong> ({totWattEvac} W)
+              </span>
+            </>
+          )}
+        </div>
+
+        <div className="mt-4 grid gap-2.5 md:grid-cols-2">
+          {DOCUMENTI_EVAC_UNI11988.map((docItem) => (
+            <label
+              key={docItem.id}
+              className={`flex items-start gap-2.5 rounded border px-3 py-2.5 text-xs cursor-pointer transition-colors ${
+                evacDocSelezionati[docItem.id]
+                  ? 'border-indigo-300 bg-indigo-50/50 text-slate-900'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={evacDocSelezionati[docItem.id]}
+                onChange={(e) =>
+                  setEvacDocSelezionati((prev) => ({
+                    ...prev,
+                    [docItem.id]: e.target.checked,
+                  }))
+                }
+                className="mt-0.5 cursor-pointer"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-900">
+                    <span className="mr-1.5 font-mono text-indigo-700">{docItem.clausola}</span>
+                    {docItem.titolo}
+                  </span>
+                  <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700">
+                    {docItem.formatoBadge}
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-600 leading-snug">
+                  {docItem.descrizione}
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <div className="mt-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+          <strong>Nota App. A.3.5 (Disegni di layout impianto EVAC):</strong> la checklist completa per orientamento planimetrie, sezioni verticali con altezze altoparlanti, ambienti esclusi, presidio remoto e legenda è integrata nella relazione <span className="font-mono">A.3.3</span> e coordinata con gli elaborati DXF <span className="font-mono">A.3.4</span> / <span className="font-mono">A.3.6</span> e gli schemi quadro sopra.
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            Selezionati: <strong className="font-mono text-slate-800">{countEvacDocSelezionati}</strong> / {DOCUMENTI_EVAC_UNI11988.length} elaborati EVAC
+          </div>
+          <button
+            type="button"
+            disabled={countEvacDocSelezionati === 0}
+            onClick={handleEsportaEvacUni11988Selezionati}
+            className="rounded-md bg-indigo-700 px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-800 disabled:cursor-not-allowed disabled:bg-slate-300 cursor-pointer whitespace-nowrap"
+          >
+            {countEvacDocSelezionati === 0
+              ? 'Seleziona almeno un elaborato EVAC'
+              : `Scarica Documentazione EVAC UNI 11988 Selezionata (${countEvacDocSelezionati})`}
+          </button>
+        </div>
+      </div>
+
       {progetto.sistemiIrai.length > 0 && (
         <div className="rounded-lg border border-slate-200 bg-white p-5">
           <div className="mb-3">
@@ -669,7 +953,12 @@ export const ExportView: React.FC<ExportViewProps> = ({
           </div>
           <div className="divide-y divide-slate-200 rounded border border-slate-200">
             {progetto.sistemiIrai.map((sys) => {
-              const totDisp = sys.loop.reduce((acc, l) => acc + l.dispositivi.length, 0);
+              const totDisp = sys.loop.reduce(
+                (acc, l) =>
+                  acc +
+                  l.dispositivi.reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0),
+                0
+              );
               return (
                 <div
                   key={sys.id}

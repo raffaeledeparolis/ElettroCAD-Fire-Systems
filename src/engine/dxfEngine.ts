@@ -2244,40 +2244,22 @@ export function generaDxfSchemaBlocchi(
     const resIrai = iraiSys ? calcolo.irai[iraiSys.id] : undefined;
     const resEvac = evacSys ? calcolo.evac[evacSys.id] : undefined;
 
-    const totRiv = iraiSys
-      ? iraiSys.loop.reduce(
-          (a, l) =>
-            a +
-            l.dispositivi.filter(
-              (d) => d.tipo === 'rivelatore_ottico' || d.tipo === 'rivelatore_termico'
-            ).length,
-          0
-        )
-      : 0;
-    const totPuls = iraiSys
-      ? iraiSys.loop.reduce(
-          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'pulsante_manuale').length,
-          0
-        )
-      : 0;
-    const totModIn = iraiSys
-      ? iraiSys.loop.reduce(
-          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'modulo_ingresso').length,
-          0
-        )
-      : 0;
-    const totTarghe = iraiSys
-      ? iraiSys.loop.reduce(
-          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'targa_ottico_acustica').length,
-          0
-        )
-      : 0;
-    const totModOut = iraiSys
-      ? iraiSys.loop.reduce(
-          (a, l) => a + l.dispositivi.filter((d) => d.tipo === 'modulo_uscita').length,
-          0
-        )
-      : 0;
+    const sommaTipo = (tipi: string[]) =>
+      iraiSys
+        ? iraiSys.loop.reduce(
+            (a, l) =>
+              a +
+              l.dispositivi
+                .filter((d) => tipi.includes(d.tipo))
+                .reduce((sd, d) => sd + Math.max(1, d.quantita ?? 1), 0),
+            0
+          )
+        : 0;
+    const totRiv = sommaTipo(['rivelatore_ottico', 'rivelatore_termico']);
+    const totPuls = sommaTipo(['pulsante_manuale']);
+    const totModIn = sommaTipo(['modulo_ingresso']);
+    const totTarghe = sommaTipo(['targa_ottico_acustica']);
+    const totModOut = sommaTipo(['modulo_uscita']);
 
     // Colonna 1: Campo di Rivelazione e Ingresso
     const c1X = geom.innerX + 8;
@@ -2890,4 +2872,644 @@ export function generaDxfAlimentazioni(
 
   return finalizeDxfString(numTavole, sheetW, sheetH, entities);
 }
+
+// ============================================================================
+// 7. SCHEMA A BLOCCHI EVAC & TABELLA CAUSA-EFFETTO INTEGRATA (UNI 11988:2025 A.3.4)
+// ============================================================================
+export function generaDxfEvacSchemaBlocchi(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  template: TemplateTavolaDXF
+): string {
+  const sheetW =
+    template.orientamento === 'orizzontale' ? Math.max(template.larghezzaMm, 420) : 297;
+  const sheetH =
+    template.orientamento === 'orizzontale' ? Math.max(template.altezzaMm, 297) : 420;
+
+  const allLineeEvac = progetto.sistemiEvac.flatMap((sys) => {
+    const rSys = calcolo.evac[sys.id];
+    return sys.lineeAltoparlanti.map((ln) => ({
+      sistemaSigla: sys.sigla,
+      ln,
+      res: rSys?.lineeRisultati.find((r) => r.lineaId === ln.id),
+    }));
+  });
+
+  const ceEvacRows = progetto.sistemiIrai.flatMap((sys) =>
+    sys.causaEffetto
+      .filter((ce) => ce.attivaEvac)
+      .map((ce) => ({
+        iraiSigla: sys.sigla,
+        zonaCodice: sys.zone.find((z) => z.id === ce.causaZonaId)?.codice ?? 'TUTTE',
+        ce,
+      }))
+  );
+
+  const ROWS_PER_PAGE = 7;
+  const numTavole = Math.max(
+    1,
+    Math.ceil(Math.max(allLineeEvac.length, ceEvacRows.length) / ROWS_PER_PAGE)
+  );
+  const entities: string[] = [];
+
+  for (let sheetIdx = 0; sheetIdx < numTavole; sheetIdx++) {
+    const ox = sheetIdx * (sheetW + 30);
+    const oy = 0;
+    const geom = renderDxfTemplateFrame(entities, ox, oy, sheetW, sheetH);
+    const footerTopY = renderNotaCartiglioFooter(
+      entities,
+      geom,
+      progetto,
+      calcolo,
+      template,
+      sheetIdx,
+      numTavole,
+      'Schema a Blocchi EVAC e Causa-Effetto (UNI 11988:2025 A.3.4)'
+    );
+    const bodyTopY = renderDocumentTopHeader(
+      entities,
+      geom,
+      progetto,
+      'SCHEMA A BLOCCHI EVAC (UNI 11988:2025 A.3.4)',
+      'SYM_HDR_BLOCCHI'
+    );
+
+    const drawBox = (
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      title: string,
+      linesText: string[],
+      color: number
+    ) => {
+      entities.push(dxfRect('QUADRI', x, y, w, h, color));
+      entities.push(dxfLine('QUADRI', x, y + h - 5.5, x + w, y + h - 5.5, color));
+      entities.push(dxfText('TESTI', x + w / 2, y + h - 2.8, 1.85, title.slice(0, 36), color, 'center'));
+      linesText.slice(0, 4).forEach((ln, i) => {
+        entities.push(
+          dxfText('TESTI', x + 2.5, y + h - 9.0 - i * 4.1, 1.6, ln.slice(0, 42), 7, 'left')
+        );
+      });
+    };
+
+    const drawArrowH = (x1: number, x2: number, y: number, label: string, color = 7) => {
+      entities.push(dxfLine('LINEE', x1, y, x2, y, color));
+      const dir = x2 >= x1 ? 1 : -1;
+      entities.push(
+        dxfLine('LINEE', x2, y, x2 - 2.6 * dir, y + 1.3, color),
+        dxfLine('LINEE', x2, y, x2 - 2.6 * dir, y - 1.3, color)
+      );
+      if (label) {
+        entities.push(dxfText('TESTI', (x1 + x2) / 2, y + 2.2, 1.5, label.slice(0, 28), color, 'center'));
+      }
+    };
+
+    const diagTop = bodyTopY - 3;
+    const diagH = 114;
+    const diagBot = diagTop - diagH;
+    entities.push(dxfRect('TABELLE', geom.innerX, diagBot, geom.innerW, diagH, 8));
+    entities.push(
+      dxfText(
+        'TESTI',
+        geom.innerX + 3,
+        diagTop - 4.0,
+        2.0,
+        'ARCHITETTURA A BLOCCHI VACIE, INTERCONNESSIONI IRAI/MICROFONI E ZONE ADA (UNI 11988:2025)',
+        7,
+        'left'
+      )
+    );
+
+    const evacSys = progetto.sistemiEvac[0];
+    const iraiSys = progetto.sistemiIrai[0];
+    const resEvac = evacSys ? calcolo.evac[evacSys.id] : undefined;
+    const quadro = progetto.quadri[0];
+
+    // Colonna 1: Ingressi Prioritari e Interfacce
+    const c1X = geom.innerX + 8;
+    const boxW = 76;
+    drawBox(
+      c1X,
+      diagTop - 36,
+      boxW,
+      26,
+      'MICROFONI DI EMERGENZA (VV.F.)',
+      [
+        'Postazione principale sala controllo',
+        'Priorita assoluta su messaggi registrati',
+        'Linea microfonica schermata PH120',
+      ],
+      1
+    );
+    drawBox(
+      c1X,
+      diagTop - 69,
+      boxW,
+      27,
+      `INTERFACCIA IRAI ${iraiSys?.sigla ?? 'IRAI-01'}`,
+      [
+        `Stato: ${evacSys?.interfacciaIraiCollegata ? 'COLLEGATA E SUPERVISIONATA' : 'NON COLLEGATA'}`,
+        `Cavo interfaccia: ${evacSys?.cavoInterfacciaResistenteFuoco ?? 'PH120'}`,
+        `Regole attivazione EVAC: ${ceEvacRows.length}`,
+      ],
+      1
+    );
+    drawBox(
+      c1X,
+      diagTop - 105,
+      boxW,
+      29,
+      'ALIM. PRIMARIA & SECONDARIA VACIE',
+      [
+        `Quadro: ${quadro?.sigla ?? 'Q.ANT-01'} (230V Sicurezza)`,
+        `Batterie EN 54-4: ${evacSys?.capacitaBatterieInstallataAh ?? 0} Ah (min ${resEvac?.capacitaBatterieMinimaAh ?? 0} Ah)`,
+        `Autonomia: ${evacSys?.autonomiaQuieteRichiestaOre ?? 24}h + ${evacSys?.autonomiaAllarmeRichiestaMin ?? 30}m`,
+      ],
+      3
+    );
+
+    // Colonna 2: VACIE & Amplificatori
+    const c2X = c1X + boxW + 36;
+    const c2W = 92;
+    const totAmpAtt = evacSys ? evacSys.amplificatori.filter((a) => !a.diRiserva).length : 0;
+    const totAmpRis = evacSys ? evacSys.amplificatori.filter((a) => a.diRiserva).length : 0;
+    drawBox(
+      c2X,
+      diagTop - 58,
+      c2W,
+      46,
+      `CENTRALE VACIE ${evacSys?.sigla ?? 'EVAC-01'} (EN 54-16)`,
+      [
+        `${evacSys?.nome ?? 'Sistema Evacuazione Vocale'}`,
+        `Modello: ${evacSys?.modelloCentrale ?? 'VACIE EN 54-16'}`,
+        `Separaz. potenza: ${evacSys?.separazioneCircuitiPotenza ? 'SI' : 'NO'} · Margine: ${evacSys?.marginePotenzaRichiestoPct ?? 20}%`,
+        `Sistemi EVAC in commessa: ${progetto.sistemiEvac.length}`,
+      ],
+      5
+    );
+    drawBox(
+      c2X,
+      diagTop - 105,
+      c2W,
+      34,
+      'STADIO AMPLIFICAZIONE & RISERVA N+1',
+      [
+        `Amplificatori attivi: ${totAmpAtt} (${resEvac?.potenzaAmplificatoriAttiviW ?? 0} W)`,
+        `Amplificatori riserva: ${totAmpRis} (N+1: ${evacSys?.ridondanzaAmplificatoriN1 ? 'ATTIVA' : 'NO'})`,
+        `Potenza richiesta + marg.: ${resEvac?.potenzaRichiestaConMargineW ?? 0} W`,
+      ],
+      5
+    );
+
+    drawArrowH(c1X + boxW, c2X, diagTop - 23, 'Bus Microfoni (PH120)', 1);
+    drawArrowH(c1X + boxW, c2X, diagTop - 55, `Comandi IRAI (${evacSys?.cavoInterfacciaResistenteFuoco ?? 'PH120'})`, 1);
+    drawArrowH(c1X + boxW, c2X, diagTop - 90, '230V / 24V CC EN54-4', 3);
+    entities.push(dxfLine('LINEE', c2X + c2W / 2, diagTop - 71, c2X + c2W / 2, diagTop - 58, 5));
+    entities.push(dxfText('TESTI', c2X + c2W / 2 + 2, diagTop - 64, 1.5, 'MATRICE AUDIO', 5, 'left'));
+
+    // Colonna 3: Zone di Allarme Vocale / ADA e Linee Altoparlanti
+    const c3X = c2X + c2W + 34;
+    const c3W = geom.innerR - 8 - c3X;
+    const pageLinee = allLineeEvac.slice(
+      sheetIdx * ROWS_PER_PAGE,
+      (sheetIdx + 1) * ROWS_PER_PAGE
+    );
+    const totDiff = evacSys
+      ? evacSys.lineeAltoparlanti.reduce((a, l) => a + l.numeroAltoparlanti, 0)
+      : 0;
+    drawBox(
+      c3X,
+      diagTop - 52,
+      c3W,
+      40,
+      'ZONE ALLARME VOCALE & ADA (EN 54-24)',
+      [
+        `Linee altoparlanti 100V/70V: ${evacSys?.lineeAltoparlanti.length ?? 0}`,
+        `Totale diffusori in campo: ${totDiff} pz (${resEvac?.potenzaTotaleAltoparlantiW ?? 0} W)`,
+        `Topologia supervisionata: Anello / Radiale`,
+        `Cavi resistenti fuoco CEI 20-105 / PH30-PH120`,
+      ],
+      1
+    );
+    drawBox(
+      c3X,
+      diagTop - 105,
+      c3W,
+      42,
+      'DETTAGLIO LINEE DIFFUSORI (TAVOLA CORRENTE)',
+      pageLinee.slice(0, 4).map(
+        (item) =>
+          `${item.ln.sigla} (${item.ln.zonaNome.slice(0, 14)}): ${item.ln.potenzaTotaleAltoparlantiW}W · dV=${item.res?.cadutaTensionePct ?? 0}%`
+      ),
+      3
+    );
+
+    drawArrowH(c2X + c2W, c3X, diagTop - 32, 'Linee 100V/70V Supervisionate', 1);
+    drawArrowH(c2X + c2W, c3X, diagTop - 86, 'Monitoraggio Impedenza / Isolamento', 3);
+
+    // Tabella inferiore: Causa-Effetto integrata IRAI -> EVAC (UNI 11988 A.3.4)
+    const tblTop = diagBot - 4;
+    const tblBot = footerTopY + 3;
+    const hdrH = 10;
+    const rowH = 10.5;
+
+    entities.push(dxfRect('TABELLE', geom.innerX, tblTop - hdrH, geom.innerW, hdrH, 7));
+    entities.push(
+      dxfText(
+        'TESTI',
+        geom.innerX + 3,
+        tblTop - 4.0,
+        1.95,
+        `SCHEMA FUNZIONALE PARTICOLAREGGIATO — MATRICE CAUSA-EFFETTO INTEGRATA IRAI -> EVAC (Tav. ${sheetIdx + 1}/${numTavole})`,
+        7,
+        'left'
+      )
+    );
+
+    const cols = [
+      { w: 26, label: 'IRAI' },
+      { w: 26, label: 'Zona / ADA' },
+      { w: 124, label: 'Evento Causa (Allarme Rivelazione)' },
+      { w: 136, label: 'Messaggio Vocale EVAC & Azione Prioritaria' },
+      { w: 40, label: 'Targhe O/A' },
+      { w: 0, label: 'Ritardo [s]' },
+    ];
+    const usedW = cols.slice(0, -1).reduce((a, c) => a + c.w, 0);
+    cols[cols.length - 1].w = geom.innerW - usedW;
+
+    const colHdrY = tblTop - hdrH - 7;
+    entities.push(dxfRect('TABELLE', geom.innerX, colHdrY, geom.innerW, 7, 7));
+    let cx = geom.innerX;
+    cols.forEach((c, idx) => {
+      if (idx > 0) entities.push(dxfLine('TABELLE', cx, colHdrY, cx, colHdrY + 7, 7));
+      entities.push(dxfText('TESTI', cx + c.w / 2, colHdrY + 3.5, 1.7, c.label, 7, 'center'));
+      cx += c.w;
+    });
+
+    const pageCe = ceEvacRows.slice(
+      sheetIdx * ROWS_PER_PAGE,
+      (sheetIdx + 1) * ROWS_PER_PAGE
+    );
+    if (pageCe.length === 0) {
+      const ry = colHdrY - rowH;
+      entities.push(dxfRect('TABELLE', geom.innerX, ry, geom.innerW, rowH, 8));
+      entities.push(
+        dxfText(
+          'TESTI',
+          geom.innerX + geom.innerW / 2,
+          ry + rowH / 2,
+          1.7,
+          'Nessuna attivazione EVAC configurata nella matrice Causa-Effetto IRAI.',
+          8,
+          'center'
+        )
+      );
+    } else {
+      pageCe.forEach((row, rIdx) => {
+        const ry = colHdrY - (rIdx + 1) * rowH;
+        if (ry < tblBot) return;
+        entities.push(dxfRect('TABELLE', geom.innerX, ry, geom.innerW, rowH, 8));
+        let rx = geom.innerX;
+        const vals = [
+          row.iraiSigla,
+          row.zonaCodice,
+          row.ce.causaDescrizione.slice(0, 56),
+          row.ce.messaggioEvac.slice(0, 62) || 'Messaggio evacuazione generale',
+          row.ce.attivaTargheOtticoAcustiche ? 'SI' : 'NO',
+          `${row.ce.ritardoSecondi} s`,
+        ];
+        cols.forEach((c, idx) => {
+          if (idx > 0) entities.push(dxfLine('TABELLE', rx, ry, rx, ry + rowH, 8));
+          const align = idx === 2 || idx === 3 ? 'left' : 'center';
+          const tx = align === 'left' ? rx + 2.0 : rx + c.w / 2;
+          entities.push(dxfText('TESTI', tx, ry + rowH / 2, 1.65, vals[idx], 7, align));
+          rx += c.w;
+        });
+      });
+    }
+  }
+
+  return finalizeDxfString(numTavole, sheetW, sheetH, entities);
+}
+
+// ============================================================================
+// 8. SCHEMI ALIMENTAZIONE ELETTRICA PRIMARIA E SECONDARIA EVAC (UNI 11988:2025 A.3.6)
+// ============================================================================
+export function generaDxfEvacAlimentazioni(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  template: TemplateTavolaDXF
+): string {
+  const sheetW =
+    template.orientamento === 'orizzontale' ? Math.max(template.larghezzaMm, 420) : 297;
+  const sheetH =
+    template.orientamento === 'orizzontale' ? Math.max(template.altezzaMm, 297) : 420;
+
+  const numTavole = 1;
+  const entities: string[] = [];
+  const geom = renderDxfTemplateFrame(entities, 0, 0, sheetW, sheetH);
+  const footerTopY = renderNotaCartiglioFooter(
+    entities,
+    geom,
+    progetto,
+    calcolo,
+    template,
+    0,
+    numTavole,
+    'Alimentazione Elettrica EVAC Primaria e Secondaria (UNI 11988:2025 A.3.6)'
+  );
+  const bodyTopY = renderDocumentTopHeader(
+    entities,
+    geom,
+    progetto,
+    'ALIMENTAZIONE ELETTRICA EVAC (UNI 11988 A.3.6)',
+    'SYM_HDR_ALIM'
+  );
+
+  const areaTop = bodyTopY - 3;
+  const areaBot = footerTopY + 3;
+  const areaH = areaTop - areaBot;
+
+  const splitX = geom.innerX + Math.round(geom.innerW * 0.58);
+  const primW = splitX - geom.innerX - 3;
+  const secX = splitX + 3;
+  const secW = geom.innerR - secX;
+
+  // --- SINISTRA: A.3.6.1 ALIMENTAZIONE PRIMARIA VACIE ---
+  entities.push(dxfRect('TABELLE', geom.innerX, areaBot, primW, areaH, 7));
+  entities.push(dxfLine('TABELLE', geom.innerX, areaTop - 8, geom.innerX + primW, areaTop - 8, 7));
+  entities.push(
+    dxfText(
+      'TESTI',
+      geom.innerX + primW / 2,
+      areaTop - 4.0,
+      2.05,
+      'A.3.6.1 ALIMENTAZIONE PRIMARIA VACIE — ORIGINE, SEZIONAMENTI E PROTEZIONI',
+      7,
+      'center'
+    )
+  );
+
+  const quadro = progetto.quadri[0];
+  const origX = geom.innerX + 10;
+  const origY = areaTop - 36;
+  entities.push(dxfRect('QUADRI', origX, origY, 64, 22, 7));
+  entities.push(
+    dxfText('TESTI', origX + 32, origY + 17.5, 1.8, 'ORIGINE ALIM. PRIMARIA', 7, 'center'),
+    dxfText(
+      'TESTI',
+      origX + 32,
+      origY + 12.0,
+      1.6,
+      `${progetto.fornitura.tensioneNominaleV}V ${progetto.fornitura.tipoFornitura.toUpperCase()} · ${progetto.fornitura.sistemaDistribuzione}`,
+      7,
+      'center'
+    ),
+    dxfText(
+      'TESTI',
+      origX + 32,
+      origY + 6.5,
+      1.55,
+      `Icc=${progetto.fornitura.iccPuntoConsegnaKa ?? 'N.D.'} kA · Monte I.G.`,
+      8,
+      'center'
+    )
+  );
+
+  const qAntX = origX + 86;
+  const qBoxW = geom.innerX + primW - 10 - qAntX;
+  entities.push(dxfLine('LINEE', origX + 64, origY + 11, qAntX, origY + 11, 1));
+  entities.push(
+    dxfText('TESTI', (origX + 64 + qAntX) / 2, origY + 14, 1.45, 'FTG18OM16 PH120', 1, 'center')
+  );
+
+  entities.push(dxfRect('QUADRI', qAntX, origY, qBoxW, 22, 1));
+  entities.push(
+    dxfText(
+      'TESTI',
+      qAntX + qBoxW / 2,
+      origY + 16.5,
+      1.85,
+      `QUADRO SICUREZZA ${quadro?.sigla ?? 'Q.ANT-01'}`,
+      1,
+      'center'
+    ),
+    dxfText(
+      'TESTI',
+      qAntX + qBoxW / 2,
+      origY + 11.0,
+      1.55,
+      `I.G. ${quadro?.interruttoreGeneraleInA ?? 40}A (${quadro?.interruttoreGeneraleIcuKa ?? 16}kA) · ${quadro?.gradoIP ?? 'IP54'}`,
+      7,
+      'center'
+    ),
+    dxfText(
+      'TESTI',
+      qAntX + qBoxW / 2,
+      origY + 5.5,
+      1.5,
+      `${quadro?.alimentazionePreferenzialeAMonte ? 'DERIVAZIONE A MONTE I.G.' : 'LINEA PREFERENZIALE'}`,
+      3,
+      'center'
+    )
+  );
+
+  // Linee dedicate EVAC / UPS
+  const busY = origY - 26;
+  entities.push(dxfLine('LINEE', qAntX + qBoxW / 2, origY, qAntX + qBoxW / 2, busY, 7));
+  entities.push(dxfLine('BARRE', geom.innerX + 12, busY, geom.innerX + primW - 12, busY, 5));
+
+  const lineeEvacAlim = progetto.linee.filter(
+    (l) =>
+      l.tipoUtenza === 'centrale_evac' ||
+      l.tipoUtenza === 'amplificatore_evac' ||
+      l.tipoUtenza === 'ups_sicurezza'
+  );
+  const lineeMostrate = (lineeEvacAlim.length > 0 ? lineeEvacAlim : progetto.linee).slice(0, 4);
+  const stepX =
+    lineeMostrate.length > 1
+      ? (primW - 54) / (lineeMostrate.length - 1)
+      : 0;
+
+  lineeMostrate.forEach((ln, idx) => {
+    const res = calcolo.linee[ln.id];
+    const lx =
+      lineeMostrate.length === 1
+        ? geom.innerX + primW / 2
+        : geom.innerX + 27 + idx * stepX;
+    entities.push(dxfLine('LINEE', lx, busY, lx, busY - 12, 7));
+    const blk =
+      ln.tipoProtezione === 'magnetotermico_differenziale'
+        ? 'SYM_MTD'
+        : ln.tipoProtezione === 'magnetotermico'
+        ? 'SYM_MT'
+        : ln.tipoProtezione === 'fusibile'
+        ? 'SYM_FUS'
+        : 'SYM_SEZ';
+    entities.push(dxfInsert('PROTEZIONI', blk, lx, busY - 24, 0.85));
+    entities.push(dxfLine('LINEE', lx, busY - 36, lx, busY - 62, 1));
+    const sym =
+      ln.tipoUtenza === 'ups_sicurezza' ? 'SYM_UPS' : 'SYM_EVAC';
+    entities.push(dxfInsert('SIMBOLI_ISO7010', sym, lx, busY - 66, 1.0));
+    entities.push(
+      dxfText('TESTI', lx, busY - 73.5, 1.7, ln.sigla, 7, 'center'),
+      dxfText('TESTI', lx, busY - 78.0, 1.45, ln.descrizione.slice(0, 22), 7, 'center'),
+      dxfText(
+        'TESTI',
+        lx,
+        busY - 82.5,
+        1.45,
+        `${res?.protezioneSceltaInA ?? 16}A ${ln.curvaProtezione} | ${res?.sezioneSceltaMm2 ?? 2.5}mm2`,
+        3,
+        'center'
+      ),
+      dxfText(
+        'TESTI',
+        lx,
+        busY - 87.0,
+        1.4,
+        `${ln.resistenzaFuocoCavoScelto} · dV=${res?.cadutaTensionePct ?? 0}%`,
+        8,
+        'center'
+      )
+    );
+  });
+
+  // Note normative A.3.6.1 in basso a sinistra
+  const notePrimY = areaBot + 38;
+  entities.push(dxfLine('TABELLE', geom.innerX, notePrimY, geom.innerX + primW, notePrimY, 7));
+  entities.push(
+    dxfText(
+      'TESTI',
+      geom.innerX + 4,
+      notePrimY - 5,
+      1.7,
+      'DISPOSITIVI DI SEZIONAMENTO, PROTEZIONE E COLLEGAMENTO PRIMARIO VACIE:',
+      7,
+      'left'
+    ),
+    dxfText(
+      'TESTI',
+      geom.innerX + 4,
+      notePrimY - 12,
+      1.55,
+      '- Linea primaria dedicata e separata da altri impianti (CEI 64-8 Art. 560.7) con cavo resistente al fuoco PH120.',
+      8,
+      'left'
+    ),
+    dxfText(
+      'TESTI',
+      geom.innerX + 4,
+      notePrimY - 18.5,
+      1.55,
+      '- Sezionamento identificato in colore rosso per escludere interruzioni accidentali del sistema EVAC.',
+      8,
+      'left'
+    ),
+    dxfText(
+      'TESTI',
+      geom.innerX + 4,
+      notePrimY - 25,
+      1.55,
+      '- Collegamento verso ogni VACIE protetto contro sovracorrenti e contatti indiretti (Icu >= Icc).',
+      8,
+      'left'
+    )
+  );
+
+  // --- DESTRA SUPERIORE: A.3.6.2 ALIMENTAZIONE SECONDARIA EVAC ---
+  const secSplitY = areaBot + 78;
+  entities.push(dxfRect('TABELLE', secX, secSplitY, secW, areaTop - secSplitY, 7));
+  entities.push(dxfLine('TABELLE', secX, areaTop - 8, secX + secW, areaTop - 8, 7));
+  entities.push(
+    dxfText(
+      'TESTI',
+      secX + secW / 2,
+      areaTop - 4.0,
+      2.0,
+      'A.3.6.2 ALIMENTAZIONE SECONDARIA VACIE (EN 54-4)',
+      7,
+      'center'
+    )
+  );
+
+  let sY = areaTop - 14;
+  if (progetto.sistemiEvac.length === 0) {
+    entities.push(
+      dxfText('TESTI', secX + secW / 2, sY - 10, 1.7, 'Nessun sistema EVAC configurato.', 8, 'center')
+    );
+  } else {
+    progetto.sistemiEvac.slice(0, 3).forEach((sys) => {
+      const r = calcolo.evac[sys.id];
+      const ok = sys.capacitaBatterieInstallataAh >= (r?.capacitaBatterieMinimaAh ?? 0);
+      entities.push(dxfRect('PROTEZIONI', secX + 4, sY - 28, secW - 8, 28, ok ? 3 : 1));
+      entities.push(
+        dxfText(
+          'TESTI',
+          secX + 7,
+          sY - 4.5,
+          1.75,
+          `VACIE ${sys.sigla} — ${sys.nome.slice(0, 28)}`,
+          ok ? 3 : 1,
+          'left'
+        ),
+        dxfText(
+          'TESTI',
+          secX + 7,
+          sY - 10.5,
+          1.55,
+          `Tipologia: Gruppo batterie EN 54-4 (Iq=${sys.correnteQuieteA}A / Ia=${sys.correnteAllarmeA}A)`,
+          7,
+          'left'
+        ),
+        dxfText(
+          'TESTI',
+          secX + 7,
+          sY - 16.5,
+          1.55,
+          `Autonomia: ${sys.autonomiaQuieteRichiestaOre}h + ${sys.autonomiaAllarmeRichiestaMin}min · Batt: ${sys.capacitaBatterieInstallataAh}Ah >= ${r?.capacitaBatterieMinimaAh ?? 0}Ah`,
+          7,
+          'left'
+        ),
+        dxfText(
+          'TESTI',
+          secX + 7,
+          sY - 22.5,
+          1.4,
+          `${r?.formulaBatterie ?? ''}`.slice(0, 62),
+          8,
+          'left'
+        )
+      );
+      sY -= 32;
+    });
+  }
+
+  // --- DESTRA INFERIORE: LEGENDA SIMBOLI ---
+  entities.push(dxfRect('TABELLE', secX, areaBot, secW, secSplitY - areaBot - 3, 7));
+  entities.push(
+    dxfLine('TABELLE', secX, secSplitY - 10, secX + secW, secSplitY - 10, 7),
+    dxfText('TESTI', secX + secW / 2, secSplitY - 6.5, 1.9, 'LEGENDA SIMBOLI EVAC & ALIMENTAZIONI', 7, 'center')
+  );
+
+  const legItems: Array<{ block: string; scale: number; desc: string }> = [
+    { block: 'SYM_SEZ', scale: 0.42, desc: 'Sezionatore / Interruttore Generale' },
+    { block: 'SYM_MTD', scale: 0.42, desc: 'Interruttore Magnetotermico Differenziale (Id)' },
+    { block: 'SYM_MT', scale: 0.42, desc: 'Interruttore Magnetotermico dedicato VACIE' },
+    { block: 'SYM_EVAC', scale: 0.65, desc: 'Centrale VACIE / Amplificatori EVAC (EN 54-16)' },
+    { block: 'SYM_UPS', scale: 0.65, desc: 'UPS / Sorgente Secondaria di Sicurezza' },
+    { block: 'SYM_DM83_CENTRALE', scale: 0.65, desc: 'Centrale IRAI interfacciata con VACIE' },
+  ];
+
+  legItems.forEach((it, idx) => {
+    const ly = secSplitY - 16 - idx * 9.5;
+    if (ly < areaBot + 4) return;
+    entities.push(dxfInsert('PROTEZIONI', it.block, secX + 12, ly, it.scale));
+    entities.push(dxfText('TESTI', secX + 24, ly - 0.5, 1.55, it.desc, 7, 'left'));
+  });
+
+  return finalizeDxfString(numTavole, sheetW, sheetH, entities);
+}
+
 

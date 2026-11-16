@@ -1,6 +1,9 @@
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
-import { AVVISO_RESPONSABILITA_LEGALE } from '../data/rulesAndLibrary';
+import {
+  ANAGRAFICA_COMPONENTI_IRAI_DEFAULT,
+  AVVISO_RESPONSABILITA_LEGALE,
+} from '../data/rulesAndLibrary';
 import {
   EsitoVerifica,
   LineaUtenza,
@@ -673,8 +676,9 @@ export function esportaPdfRiepilogoSistemaIrai(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(51, 65, 85);
+    const totDispLp = lp.dispositivi.reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0);
     doc.text(
-      `Dispositivi: ${lp.dispositivi.length}/${lp.maxDispositiviConsentiti} · Iq=${lpRes?.correnteQuieteMa ?? 0} mA · Ia=${lpRes?.correnteAllarmeMa ?? 0} mA · ΔV=${lpRes?.cadutaTensioneLoopV ?? 0} V`,
+      `Dispositivi: ${totDispLp}/${lp.maxDispositiviConsentiti} · Iq=${lpRes?.correnteQuieteMa ?? 0} mA · Ia=${lpRes?.correnteAllarmeMa ?? 0} mA · ΔV=${lpRes?.cadutaTensioneLoopV ?? 0} V`,
       18,
       y
     );
@@ -683,10 +687,11 @@ export function esportaPdfRiepilogoSistemaIrai(
     lp.dispositivi.forEach((d) => {
       ensureSpace(5.5);
       const zCodice = sistema.zone.find((z) => z.id === d.zonaId)?.codice ?? '—';
+      const qta = Math.max(1, d.quantita ?? 1);
       doc.setFontSize(7.2);
       doc.setTextColor(15, 23, 42);
       doc.text(
-        `  #${String(d.indirizzo).padStart(2, '0')} [${d.sigla}] (${d.tipo.replace(/_/g, ' ')}) · Zona ${zCodice} · ${d.descrizione} · Iq/Ia: ${d.correnteQuieteMa}/${d.correnteAllarmeMa} mA`,
+        `  #${String(d.indirizzo).padStart(2, '0')} [${d.sigla}] ×${qta} (${d.tipo.replace(/_/g, ' ')}) · Zona ${zCodice} · ${d.descrizione} · Iq/Ia unit.: ${d.correnteQuieteMa}/${d.correnteAllarmeMa} mA`,
         18,
         y
       );
@@ -805,20 +810,25 @@ export function esportaExcelRiepilogoSistemaIrai(
     Codice_Zona: z.codice,
     Nome_Zona: z.nome,
     Dispositivi_Assegnati: sistema.loop.reduce(
-      (acc, l) => acc + l.dispositivi.filter((d) => d.zonaId === z.id).length,
+      (acc, l) =>
+        acc +
+        l.dispositivi
+          .filter((d) => d.zonaId === z.id)
+          .reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0),
       0
     ),
   }));
 
   const riepilogoLoop = sistema.loop.map((lp) => {
     const res = calcoloSistema?.loopRisultati.find((r) => r.loopId === lp.id);
+    const totDisp = lp.dispositivi.reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0);
     return {
       Sigla_Loop: lp.sigla,
       Nome_Loop: lp.nome,
       Lunghezza_m: lp.lunghezzaM,
       Sezione_mm2: lp.sezioneCavoMm2,
       Resistenza_Fuoco: lp.resistenzaFuoco,
-      Dispositivi_Installati: lp.dispositivi.length,
+      Dispositivi_Installati: totDisp,
       Max_Consentiti: lp.maxDispositiviConsentiti,
       Corrente_Quiete_mA: res?.correnteQuieteMa ?? 0,
       Corrente_Allarme_mA: res?.correnteAllarmeMa ?? 0,
@@ -827,18 +837,55 @@ export function esportaExcelRiepilogoSistemaIrai(
   });
 
   const elencoDispositivi = sistema.loop.flatMap((lp) =>
-    lp.dispositivi.map((d) => ({
-      Loop: lp.sigla,
-      Indirizzo: d.indirizzo,
-      Sigla: d.sigla,
-      Tipo_Componente: d.tipo,
-      Zona: sistema.zone.find((z) => z.id === d.zonaId)?.codice ?? '—',
-      Descrizione: d.descrizione,
-      Iq_mA: d.correnteQuieteMa,
-      Ia_mA: d.correnteAllarmeMa,
-      Simbolo: d.simboloCodice,
-    }))
+    lp.dispositivi.map((d) => {
+      const qta = Math.max(1, d.quantita ?? 1);
+      return {
+        Loop: lp.sigla,
+        Indirizzo: d.indirizzo,
+        Sigla: d.sigla,
+        Codice_Articolo: d.codiceArticolo ?? '',
+        Costruttore: d.costruttore ?? '',
+        Modello: d.modello ?? '',
+        Tipo_Componente: d.tipo,
+        Zona: sistema.zone.find((z) => z.id === d.zonaId)?.codice ?? '—',
+        Descrizione: d.descrizione,
+        Quantita: qta,
+        Iq_Unit_mA: d.correnteQuieteMa,
+        Ia_Unit_mA: d.correnteAllarmeMa,
+        Iq_Tot_mA: Number((d.correnteQuieteMa * qta).toFixed(2)),
+        Ia_Tot_mA: Number((d.correnteAllarmeMa * qta).toFixed(2)),
+        Simbolo: d.simboloCodice,
+      };
+    })
   );
+
+  const anagraficaComponenti = (
+    sistema.anagraficaComponenti ?? ANAGRAFICA_COMPONENTI_IRAI_DEFAULT
+  ).map((c) => {
+    const qtaInstallata = sistema.loop.reduce(
+      (acc, lp) =>
+        acc +
+        lp.dispositivi
+          .filter(
+            (d) =>
+              d.anagraficaComponenteId === c.id ||
+              (d.codiceArticolo && d.codiceArticolo === c.codice)
+          )
+          .reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0),
+      0
+    );
+    return {
+      Codice_Articolo: c.codice,
+      Costruttore: c.costruttore,
+      Modello: c.modello,
+      Tipologia: c.tipo,
+      Norma_Riferimento: c.normaRiferimento,
+      Iq_Unit_mA: c.correnteQuieteMa,
+      Ia_Unit_mA: c.correnteAllarmeMa,
+      Descrizione: c.descrizione,
+      Quantita_Installata_Loop: qtaInstallata,
+    };
+  });
 
   const matriceCausaEffetto = sistema.causaEffetto.map((ce) => ({
     Zona_Causa: sistema.zone.find((z) => z.id === ce.causaZonaId)?.codice ?? '—',
@@ -871,6 +918,13 @@ export function esportaExcelRiepilogoSistemaIrai(
     wb,
     XLSX.utils.json_to_sheet(anagraficaZone.length ? anagraficaZone : [{ Nota: 'Nessuna zona' }]),
     'Anagrafica Zone'
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(
+      anagraficaComponenti.length ? anagraficaComponenti : [{ Nota: 'Nessun articolo in anagrafica' }]
+    ),
+    'Anagrafica Componenti'
   );
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(riepilogoLoop), 'Riepilogo Loop');
   XLSX.utils.book_append_sheet(
@@ -1102,7 +1156,13 @@ export function esportaAppendiceA_RelazionePreliminareA2(
   const deroghe = progetto.deroghe.filter((d) => d.disattivata || d.motivazione.trim().length > 0);
   const haScostamenti = nonConformi.length > 0 || deroghe.length > 0;
   const totSensoriIrai = progetto.sistemiIrai.reduce(
-    (acc, s) => acc + s.loop.reduce((a, l) => a + l.dispositivi.length, 0),
+    (acc, s) =>
+      acc +
+      s.loop.reduce(
+        (a, l) =>
+          a + l.dispositivi.reduce((sd, d) => sd + Math.max(1, d.quantita ?? 1), 0),
+        0
+      ),
     0
   );
   const totDiffEvac = progetto.sistemiEvac.reduce(
@@ -1305,7 +1365,7 @@ export function esportaAppendiceA_SchedaRiassuntivaA32(
     progetto.sistemiIrai.forEach((s) =>
       s.loop.forEach((lp) => {
         addParagraph(
-          `• IRAI ${s.sigla} / ${lp.sigla} (${lp.lunghezzaM}m, ${lp.sezioneCavoMm2}mm², ${lp.resistenzaFuoco}): ${lp.dispositivi.map((d) => `#${d.indirizzo} ${d.sigla} (${d.tipo.replace(/_/g, ' ')})`).join(', ') || 'Nessun dispositivo'}`,
+          `• IRAI ${s.sigla} / ${lp.sigla} (${lp.lunghezzaM}m, ${lp.sezioneCavoMm2}mm², ${lp.resistenzaFuoco}): ${lp.dispositivi.map((d) => `#${d.indirizzo} ${d.sigla} ×${Math.max(1, d.quantita ?? 1)} (${d.tipo.replace(/_/g, ' ')})`).join(', ') || 'Nessun dispositivo'}`,
           false,
           7.2,
           16
@@ -1401,14 +1461,15 @@ export function esportaAppendiceA_SchedaRiassuntivaA32(
 
     <h3>Componenti di Campo IRAI (Rivelatori, Pulsanti, Moduli, Targhe)</h3>
     <table>
-      <thead><tr><th>Centrale / Loop</th><th>Indirizzo</th><th>Sigla</th><th>Tipo Componente</th><th>Zona</th><th>Descrizione</th><th>Iq / Ia (mA)</th></tr></thead>
+      <thead><tr><th>Centrale / Loop</th><th>Indirizzo</th><th>Sigla</th><th>Tipo Componente</th><th>Zona</th><th>Descrizione</th><th>Q.tà</th><th>Iq / Ia Tot (mA)</th></tr></thead>
       <tbody>
         ${progetto.sistemiIrai
           .flatMap((s) =>
             s.loop.flatMap((lp) =>
               lp.dispositivi.map((d) => {
                 const zCod = s.zone.find((z) => z.id === d.zonaId)?.codice ?? '—';
-                return `<tr><td class="mono">${s.sigla} / ${lp.sigla}</td><td>#${d.indirizzo}</td><td class="mono">${d.sigla}</td><td>${d.tipo.replace(/_/g, ' ')}</td><td>${zCod}</td><td>${d.descrizione}</td><td>${d.correnteQuieteMa} / ${d.correnteAllarmeMa}</td></tr>`;
+                const qta = Math.max(1, d.quantita ?? 1);
+                return `<tr><td class="mono">${s.sigla} / ${lp.sigla}</td><td>#${d.indirizzo}</td><td class="mono">${d.sigla}</td><td>${d.tipo.replace(/_/g, ' ')}</td><td>${zCod}</td><td>${d.descrizione}</td><td>${qta}</td><td>${(d.correnteQuieteMa * qta).toFixed(2)} / ${(d.correnteAllarmeMa * qta).toFixed(1)}</td></tr>`;
               })
             )
           )
@@ -1467,13 +1528,17 @@ export function esportaAppendiceA_RelazioneEsecutivaA33(
     progetto.sistemiIrai.forEach((sys) => {
       addParagraph(`Centrale IRAI ${sys.sigla} — ${sys.nome} (${sys.modelloCentrale}):`, true);
       sys.zone.forEach((z) => {
-        const disps = sys.loop.flatMap((lp) =>
+        const dispsZona = sys.loop.flatMap((lp) =>
           lp.dispositivi
             .filter((d) => d.zonaId === z.id)
-            .map((d) => `${d.sigla} [${d.tipo.replace(/_/g, ' ')}, ${lp.sigla}#${d.indirizzo}]`)
+            .map((d) => ({
+              label: `${d.sigla} ×${Math.max(1, d.quantita ?? 1)} [${d.tipo.replace(/_/g, ' ')}, ${lp.sigla}#${d.indirizzo}]`,
+              qta: Math.max(1, d.quantita ?? 1),
+            }))
         );
+        const totZona = dispsZona.reduce((s, item) => s + item.qta, 0);
         addParagraph(
-          `• Zona ${z.codice} (${z.nome}): ${disps.length} dispositivi -> ${disps.join(', ') || 'Nessun dispositivo associato'}`,
+          `• Zona ${z.codice} (${z.nome}): ${totZona} dispositivi -> ${dispsZona.map((item) => item.label).join(', ') || 'Nessun dispositivo associato'}`,
           false,
           7.6,
           16
@@ -1579,12 +1644,16 @@ export function esportaAppendiceA_RelazioneEsecutivaA33(
         <tbody>
           ${sys.zone
             .map((z) => {
-              const disps = sys.loop.flatMap((lp) =>
+              const dispsZona = sys.loop.flatMap((lp) =>
                 lp.dispositivi
                   .filter((d) => d.zonaId === z.id)
-                  .map((d) => `${lp.sigla}#${d.indirizzo} <strong>${d.sigla}</strong> (${d.tipo.replace(/_/g, ' ')})`)
+                  .map((d) => ({
+                    label: `${lp.sigla}#${d.indirizzo} <strong>${d.sigla}</strong> ×${Math.max(1, d.quantita ?? 1)} (${d.tipo.replace(/_/g, ' ')})`,
+                    qta: Math.max(1, d.quantita ?? 1),
+                  }))
               );
-              return `<tr><td class="mono">${z.codice}</td><td>${z.nome}</td><td>${disps.length}</td><td>${disps.join(', ') || 'Nessun dispositivo assegnato'}</td></tr>`;
+              const totZona = dispsZona.reduce((s, item) => s + item.qta, 0);
+              return `<tr><td class="mono">${z.codice}</td><td>${z.nome}</td><td>${totZona}</td><td>${dispsZona.map((item) => item.label).join(', ') || 'Nessun dispositivo assegnato'}</td></tr>`;
             })
             .join('')}
         </tbody>
@@ -1737,18 +1806,24 @@ export function esportaAppendiceA_ElencoComponentiA32Xlsx(
 
   const compIrai = progetto.sistemiIrai.flatMap((s) =>
     s.loop.flatMap((lp) =>
-      lp.dispositivi.map((d) => ({
-        Centrale: s.sigla,
-        Loop: lp.sigla,
-        Cavo_Loop: `${lp.sezioneCavoMm2} mm² ${lp.resistenzaFuoco} (${lp.lunghezzaM} m)`,
-        Indirizzo: d.indirizzo,
-        Sigla: d.sigla,
-        Tipo: d.tipo,
-        Zona: s.zone.find((z) => z.id === d.zonaId)?.codice ?? '—',
-        Descrizione: d.descrizione,
-        Iq_mA: d.correnteQuieteMa,
-        Ia_mA: d.correnteAllarmeMa,
-      }))
+      lp.dispositivi.map((d) => {
+        const qta = Math.max(1, d.quantita ?? 1);
+        return {
+          Centrale: s.sigla,
+          Loop: lp.sigla,
+          Cavo_Loop: `${lp.sezioneCavoMm2} mm² ${lp.resistenzaFuoco} (${lp.lunghezzaM} m)`,
+          Indirizzo: d.indirizzo,
+          Sigla: d.sigla,
+          Tipo: d.tipo,
+          Zona: s.zone.find((z) => z.id === d.zonaId)?.codice ?? '—',
+          Descrizione: d.descrizione,
+          Quantita: qta,
+          Iq_Unit_mA: d.correnteQuieteMa,
+          Ia_Unit_mA: d.correnteAllarmeMa,
+          Iq_Tot_mA: Number((d.correnteQuieteMa * qta).toFixed(2)),
+          Ia_Tot_mA: Number((d.correnteAllarmeMa * qta).toFixed(2)),
+        };
+      })
     )
   );
 
@@ -1827,5 +1902,892 @@ export function esportaAppendiceA_ElencoComponentiA32Xlsx(
     `${progetto.identificativi.commessa}_A32_Elenco_Componenti_Elaborati.xlsx`
   );
 }
+
+// ============================================================================
+// DOCUMENTAZIONE EVAC — NORMATIVA UNI 11988:2025 (APPENDICE A: A.3.1 ÷ A.3.6)
+// ============================================================================
+
+interface VoceAcusticaAdaEvac {
+  sistemaSigla: string;
+  lineaSigla: string;
+  adaCodice: string;
+  zonaNome: string;
+  numDiffusori: number;
+  potenzaTotaleW: number;
+  potenzaSingoloDiffusoreW: number;
+  rt60BandeS: [number, number, number, number, number, number, number]; // 125, 250, 500, 1k, 2k, 4k, 8k Hz
+  rumoreBandeDb: [number, number, number, number, number, number, number]; // 125..8k Hz
+  fonteDatoRumore: string;
+}
+
+const BANDE_OTTAVA_HZ = ['125 Hz', '250 Hz', '500 Hz', '1 kHz', '2 kHz', '4 kHz', '8 kHz'] as const;
+
+function calcolaProfiloAcusticoAdaEvac(progetto: ProgettoAntincendio): VoceAcusticaAdaEvac[] {
+  const isDepositoOIndustriale =
+    progetto.ambiente.tipoLocale === 'deposito_marci' ||
+    progetto.ambiente.tipoLocale === 'locale_tecnico_antincendio';
+
+  const baseRt60: [number, number, number, number, number, number, number] = isDepositoOIndustriale
+    ? [1.55, 1.45, 1.35, 1.25, 1.15, 1.0, 0.85]
+    : [1.1, 1.0, 0.95, 0.9, 0.85, 0.75, 0.65];
+
+  const baseRumore: [number, number, number, number, number, number, number] = isDepositoOIndustriale
+    ? [66, 65, 64, 63, 61, 58, 55]
+    : [55, 53, 51, 49, 46, 43, 40];
+
+  const fonteDato = isDepositoOIndustriale
+    ? 'Stima preliminare / Prospetto 24 UNI 9795:2021 (aree operative - da validare con rilievo fonometrico)'
+    : 'Stima da tabelle / Prospetto 24 UNI 9795:2021 (edifici nuovi) o misura diretta in opera (esistenti)';
+
+  return progetto.sistemiEvac.flatMap((sys) =>
+    sys.lineeAltoparlanti.map((ln, idx) => {
+      const pSingolo =
+        ln.numeroAltoparlanti > 0
+          ? Number((ln.potenzaTotaleAltoparlantiW / ln.numeroAltoparlanti).toFixed(2))
+          : 0;
+      const offsetRt = Number(((idx % 3) * 0.05).toFixed(2));
+      const offsetDb = (idx % 3) * 2;
+      return {
+        sistemaSigla: sys.sigla,
+        lineaSigla: ln.sigla,
+        adaCodice: `ADA-${sys.sigla}-${String(idx + 1).padStart(2, '0')}`,
+        zonaNome: ln.zonaNome,
+        numDiffusori: ln.numeroAltoparlanti,
+        potenzaTotaleW: ln.potenzaTotaleAltoparlantiW,
+        potenzaSingoloDiffusoreW: pSingolo,
+        rt60BandeS: baseRt60.map((v) => Number((v + offsetRt).toFixed(2))) as VoceAcusticaAdaEvac['rt60BandeS'],
+        rumoreBandeDb: baseRumore.map((v) => v + offsetDb) as VoceAcusticaAdaEvac['rumoreBandeDb'],
+        fonteDatoRumore: fonteDato,
+      };
+    })
+  );
+}
+
+function costruisciRegistroElaboratiEvacUni11988(
+  progetto: ProgettoAntincendio
+): VoceRegistroElaborato[] {
+  const comm = progetto.identificativi.commessa;
+  const rev = progetto.identificativi.revisione;
+  const data = progetto.identificativi.data;
+  return [
+    {
+      codice: `${comm}-EVAC-A32`,
+      riferimentoAppendiceA: 'UNI 11988:2025 App. A.3.2',
+      titolo: 'Scheda Riassuntiva Impianto EVAC, Centrali VACIE, Conformità e Componenti',
+      emissione: rev,
+      data,
+      formato: 'DOC / PDF',
+    },
+    {
+      codice: `${comm}-EVAC-A33`,
+      riferimentoAppendiceA: 'UNI 11988:2025 App. A.3.3',
+      titolo: 'Relazione Tecnico-Descrittiva EVAC, Relazione Acustica ADA (125Hz–8kHz) e Cavi',
+      emissione: rev,
+      data,
+      formato: 'DOC / PDF',
+    },
+    {
+      codice: `${comm}-EVAC-A32-EL`,
+      riferimentoAppendiceA: 'UNI 11988:2025 App. A.3.2-i / A.3.3',
+      titolo: 'Elenco Componenti EVAC, Potenze Diffusori/Amplificatori e Matrice Acustica ADA',
+      emissione: rev,
+      data,
+      formato: 'XLSX',
+    },
+    {
+      codice: `${comm}-EVAC-A34`,
+      riferimentoAppendiceA: 'UNI 11988:2025 App. A.3.4',
+      titolo: 'Schema a Blocchi Impianto EVAC & Tabella Causa-Effetto Integrata IRAI-EVAC',
+      emissione: rev,
+      data,
+      formato: 'DXF R2000',
+    },
+    {
+      codice: `${comm}-EVAC-A35`,
+      riferimentoAppendiceA: 'UNI 11988:2025 App. A.3.5 / CEI 0-2',
+      titolo: 'Disegni di Layout Impianto EVAC, Sezioni Altoparlanti e Schemi Elettrici di Quadro',
+      emissione: rev,
+      data,
+      formato: 'DXF R2000 / PDF',
+    },
+    {
+      codice: `${comm}-EVAC-A36`,
+      riferimentoAppendiceA: 'UNI 11988:2025 App. A.3.6.1 & A.3.6.2',
+      titolo: 'Schemi Alimentazione Elettrica Primaria e Secondaria VACIE + Legenda Simboli',
+      emissione: rev,
+      data,
+      formato: 'DXF R2000',
+    },
+  ];
+}
+
+export function esportaEvacUni11988_SchedaRiassuntivaA32(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  esiti: EsitoVerifica[],
+  formato: 'doc' | 'pdf' = 'doc'
+) {
+  const registro = costruisciRegistroElaboratiEvacUni11988(progetto);
+  const esitiEvac = esiti.filter(
+    (e) =>
+      e.categoria === 'evac' ||
+      e.targetId.toLowerCase().includes('evac') ||
+      e.targetLabel.toLowerCase().includes('evac')
+  );
+  const nonConformi = esitiEvac.filter((e) => e.stato === 'non_conforme' && !e.derogata);
+  const deroghe = progetto.deroghe.filter((d) => d.disattivata || d.motivazione.trim().length > 0);
+  const lineeAlimEvac = progetto.linee.filter(
+    (l) =>
+      l.tipoUtenza === 'centrale_evac' ||
+      l.tipoUtenza === 'amplificatore_evac' ||
+      l.tipoUtenza === 'ups_sicurezza'
+  );
+
+  if (formato === 'pdf') {
+    const { doc, addHeading, addParagraph, addBullets } = creaPdfAppendiceABuilder(
+      progetto,
+      calcolo,
+      'SCHEDA RIASSUNTIVA IMPIANTO EVAC (UNI 11988:2025 — APPENDICE A.3.2)',
+      'UNI 11988:2025 Appendice A.3.2 (a ÷ i)'
+    );
+
+    addHeading('A.3.2 a) Identificazione Progetto e Progettista');
+    addBullets([
+      `Nome progetto / Attività: ${progetto.identificativi.titoloTavola} (${progetto.attivitaNome})`,
+      `Commessa: ${progetto.identificativi.commessa} | Cliente: ${progetto.identificativi.cliente} | Sito: ${progetto.identificativi.sito}`,
+      `Progettista: ${progetto.identificativi.progettista} | Studio: ${progetto.identificativi.logoTestoStudio} | Livello Prestazione: ${progetto.livelloPrestazione}`,
+    ]);
+
+    addHeading('A.3.2 b÷e) Registro Numeri di Riferimento, Emissione, Date e Titoli Disegni/Documenti');
+    addBullets(
+      registro.map(
+        (r) => `[${r.codice}] Rev. ${r.emissione} (${r.data}) — ${r.titolo} [${r.riferimentoAppendiceA} · ${r.formato}]`
+      ),
+      7.4
+    );
+
+    addHeading('A.3.2 f÷g) Tipi di Impianto EVAC, Tipo di VACIE e Riferimenti di Ogni VACIE');
+    if (progetto.sistemiEvac.length === 0) {
+      addParagraph('Nessun sistema EVAC/VACIE configurato nel progetto corrente.');
+    } else {
+      progetto.sistemiEvac.forEach((sys, idx) => {
+        const res = calcolo.evac[sys.id];
+        addParagraph(
+          `• VACIE #${idx + 1} [${sys.sigla}] "${sys.nome}" — Tipo/Modello: ${sys.modelloCentrale} (EN 54-16 / EN 54-4) · Ridondanza N+1: ${sys.ridondanzaAmplificatoriN1 ? 'Sì' : 'No'} (riserva rilevata: ${res?.haAmplificatoreRiserva ? 'Sì' : 'No'}) · Amplif. attivi: ${res?.potenzaAmplificatoriAttiviW ?? 0} W · Carico diffusori: ${res?.potenzaTotaleAltoparlantiW ?? 0} W (${sys.lineeAltoparlanti.length} linee 100V/70V) · Batt. ${sys.capacitaBatterieInstallataAh} Ah (min ${res?.capacitaBatterieMinimaAh ?? 0} Ah)`,
+          false,
+          7.6,
+          16
+        );
+      });
+    }
+
+    addHeading('A.3.2 h) Dichiarazione di Conformità alla UNI 11988:2025 o Scostamenti');
+    if (nonConformi.length === 0 && deroghe.length === 0) {
+      addParagraph(
+        'DICHIARAZIONE DI CONFORMITÀ: Sulla base dei dati progettuali disponibili, gli impianti di allarme vocale per scopi di emergenza (EVAC) risultano progettati in conformità ai requisiti della norma UNI 11988:2025 senza scostamenti.'
+      );
+    } else {
+      addParagraph('SCOSTAMENTI / DEROGHE MOTIVATE RILEVATE:');
+      deroghe.forEach((d) =>
+        addParagraph(`• Deroga ${d.regolaId} (${d.targetId}): ${d.motivazione} (${d.autore}, ${d.data})`, false, 7.5, 16)
+      );
+      nonConformi.forEach((nc) =>
+        addParagraph(`• Scostamento ${nc.codice} (${nc.targetLabel}): ${nc.messaggio} [${nc.valoreCalcolato} vs ${nc.sogliaAttesa}]`, false, 7.5, 16)
+      );
+    }
+
+    addHeading('A.3.2 i) Elenco dei Componenti Inclusi nel Sistema EVAC e Relative Specifiche');
+    progetto.sistemiEvac.forEach((sys) => {
+      addParagraph(`Sistema VACIE ${sys.sigla} (${sys.modelloCentrale}):`, true, 8, 14);
+      sys.amplificatori.forEach((a) =>
+        addParagraph(
+          `• Amplificatore [${a.sigla}] ${a.modello}: ${a.potenzaNominaleW} W (${a.diRiserva ? 'Riserva N+1' : 'Attivo'}) — EN 54-16`,
+          false,
+          7.4,
+          16
+        )
+      );
+      sys.lineeAltoparlanti.forEach((ln) => {
+        const pUnit =
+          ln.numeroAltoparlanti > 0
+            ? (ln.potenzaTotaleAltoparlantiW / ln.numeroAltoparlanti).toFixed(1)
+            : '0';
+        const rl = calcolo.evac[sys.id]?.lineeRisultati.find((r) => r.lineaId === ln.id);
+        addParagraph(
+          `• Linea [${ln.sigla}] "${ln.zonaNome}": ${ln.numeroAltoparlanti} diffusori EN 54-24 da ${pUnit} W cad. (Tot ${ln.potenzaTotaleAltoparlantiW} W) · ${ln.tensioneLineaV} V ${ln.topologia} · Cavo ${ln.sezioneMm2} mm² ${ln.resistenzaFuoco} (${ln.lunghezzaM} m, ΔV=${rl?.cadutaTensionePct ?? 0}%)`,
+          false,
+          7.3,
+          16
+        );
+      });
+      addParagraph(
+        `• Microfoni di emergenza & Interfaccia IRAI: Postazione microfonica di emergenza presidiata (EN 54-16, cavo ${sys.cavoInterfacciaResistenteFuoco}) · Collegamento IRAI: ${sys.interfacciaIraiCollegata ? 'Attivo e sorvegliato' : 'Da collegare'}`,
+        false,
+        7.3,
+        16
+      );
+    });
+    lineeAlimEvac.forEach((l) => {
+      const r = calcolo.linee[l.id];
+      addParagraph(
+        `• Alimentazione dedicata [${l.sigla}] ${l.descrizione}: ${r?.siglaProtezioneCompleta ?? ''} | ${r?.siglaCavoCompleta ?? ''} (${l.lunghezzaM} m)`,
+        false,
+        7.3,
+        16
+      );
+    });
+
+    doc.save(`${progetto.identificativi.commessa}_EVAC_UNI11988_A32_Scheda_Riassuntiva.pdf`);
+    return;
+  }
+
+  const body = `
+    <h1>SCHEDA RIASSUNTIVA IMPIANTO EVAC (UNI 11988:2025 — APPENDICE A.3.2)</h1>
+    <h2>A.3.2 a) Identificazione del Progetto e del Progettista</h2>
+    <table>
+      <tr><th>Nome Progetto / Titolo</th><td>${progetto.identificativi.titoloTavola} (${progetto.attivitaNome})</td><th>Commessa</th><td>${progetto.identificativi.commessa}</td></tr>
+      <tr><th>Cliente / Sito</th><td>${progetto.identificativi.cliente} — ${progetto.identificativi.sito}</td><th>Livello Prestazione</th><td>${progetto.livelloPrestazione}</td></tr>
+      <tr><th>Progettista</th><td>${progetto.identificativi.progettista}</td><th>Studio / Rev.</th><td>${progetto.identificativi.logoTestoStudio} · Rev. ${progetto.identificativi.revisione} (${progetto.identificativi.data})</td></tr>
+    </table>
+
+    <h2>A.3.2 b÷e) Registro Disegni e Documenti del Sistema EVAC</h2>
+    <table>
+      <thead><tr><th>N. Riferimento</th><th>N. Emissione</th><th>Data Emissione</th><th>Titolo Disegno o Documento</th><th>Riferimento UNI 11988</th><th>Formato</th></tr></thead>
+      <tbody>
+        ${registro
+          .map(
+            (r) =>
+              `<tr><td class="mono">${r.codice}</td><td>${r.emissione}</td><td>${r.data}</td><td>${r.titolo}</td><td>${r.riferimentoAppendiceA}</td><td>${r.formato}</td></tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>
+
+    <h2>A.3.2 f÷g) Tipologia Impianto EVAC, Tipo di VACIE e Riferimenti di Ogni VACIE</h2>
+    <table>
+      <thead><tr><th>Rif. VACIE</th><th>Denominazione</th><th>Tipo Impianto & Modello VACIE</th><th>Amplificatori & Carico</th><th>Autonomia Batterie</th></tr></thead>
+      <tbody>
+        ${
+          progetto.sistemiEvac.length === 0
+            ? '<tr><td colspan="5">Nessun sistema EVAC/VACIE configurato nel progetto corrente.</td></tr>'
+            : progetto.sistemiEvac
+                .map((sys) => {
+                  const res = calcolo.evac[sys.id];
+                  return `<tr>
+                    <td class="mono">${sys.sigla}</td>
+                    <td>${sys.nome}</td>
+                    <td>Sistema Allarme Vocale EVAC 100V/70V — <strong>${sys.modelloCentrale}</strong> (EN 54-16 / EN 54-4)</td>
+                    <td>Attivi ${res?.potenzaAmplificatoriAttiviW ?? 0} W | Carico ${res?.potenzaTotaleAltoparlantiW ?? 0} W | Riserva N+1: ${res?.haAmplificatoreRiserva ? 'Presente' : 'Assente'} (${sys.lineeAltoparlanti.length} linee)</td>
+                    <td>${sys.capacitaBatterieInstallataAh} Ah (min ${res?.capacitaBatterieMinimaAh ?? 0} Ah) · ${sys.autonomiaQuieteRichiestaOre}h + ${sys.autonomiaAllarmeRichiestaMin}m</td>
+                  </tr>`;
+                })
+                .join('')
+        }
+      </tbody>
+    </table>
+
+    <h2>A.3.2 h) Dichiarazione di Conformità Progettuale alla UNI 11988:2025 o Scostamenti</h2>
+    ${
+      nonConformi.length === 0 && deroghe.length === 0
+        ? `<div class="box ok">DICHIARAZIONE DI CONFORMITÀ: L'impianto EVAC è progettato in conformità ai requisiti della norma UNI 11988:2025, sulla base dei dati progettuali disponibili, senza scostamenti rilevati.</div>`
+        : `<div class="box warn">INFORMAZIONI SUGLI SCOSTAMENTI DAI REQUISITI DELLA NORMA E RELATIVE MOTIVAZIONI:</div>
+           <ul>
+             ${deroghe.map((d) => `<li><strong>Deroga ${d.regolaId} (${d.targetId}):</strong> ${d.motivazione} — ${d.autore} (${d.data})</li>`).join('')}
+             ${nonConformi.map((nc) => `<li><strong>Scostamento ${nc.codice} (${nc.targetLabel}):</strong> ${nc.messaggio} [${nc.valoreCalcolato} vs ${nc.sogliaAttesa}]</li>`).join('')}
+           </ul>`
+    }
+
+    <h2>A.3.2 i) Elenco Completo dei Componenti Inclusi nel Sistema EVAC con Relative Specifiche</h2>
+    <table>
+      <thead><tr><th>VACIE</th><th>Categoria</th><th>Sigla / Rif.</th><th>Modello / Zona / Tipologia</th><th>Specifiche Tecniche</th></tr></thead>
+      <tbody>
+        ${progetto.sistemiEvac
+          .flatMap((sys) => [
+            `<tr><td class="mono">${sys.sigla}</td><td>Unità Centrale VACIE</td><td class="mono">${sys.sigla}</td><td>${sys.modelloCentrale} — ${sys.nome}</td><td>EN 54-16 / EN 54-4 · Iq=${sys.correnteQuieteA}A, Ia=${sys.correnteAllarmeA}A · Batt. ${sys.capacitaBatterieInstallataAh}Ah · Margine ampl. ${sys.marginePotenzaRichiestoPct}%</td></tr>`,
+            ...sys.amplificatori.map(
+              (a) =>
+                `<tr><td class="mono">${sys.sigla}</td><td>Amplificatore</td><td class="mono">${a.sigla}</td><td>${a.modello}</td><td>Potenza nominale ${a.potenzaNominaleW} W — Ruolo: ${a.diRiserva ? 'Riserva N+1' : 'Attivo'} (EN 54-16)</td></tr>`
+            ),
+            ...sys.lineeAltoparlanti.map((ln) => {
+              const pUnit =
+                ln.numeroAltoparlanti > 0
+                  ? (ln.potenzaTotaleAltoparlantiW / ln.numeroAltoparlanti).toFixed(1)
+                  : '0';
+              const rl = calcolo.evac[sys.id]?.lineeRisultati.find((r) => r.lineaId === ln.id);
+              return `<tr><td class="mono">${sys.sigla}</td><td>Diffusori & Linea</td><td class="mono">${ln.sigla}</td><td>${ln.zonaNome} (${ln.numeroAltoparlanti} diffusori EN 54-24)</td><td>Potenza unitaria ${pUnit} W/pz (Tot ${ln.potenzaTotaleAltoparlantiW} W) · ${ln.tensioneLineaV}V ${ln.topologia} · L=${ln.lunghezzaM}m · ${ln.sezioneMm2}mm² ${ln.resistenzaFuoco} · ΔV=${rl?.cadutaTensionePct ?? 0}%</td></tr>`;
+            }),
+            `<tr><td class="mono">${sys.sigla}</td><td>Microfoni / Interfaccia</td><td class="mono">MIC-${sys.sigla}</td><td>Postazione Microfonica Emergenza & Interfaccia IRAI</td><td>Microfono sorvegliato EN 54-16 in sala/punto controllo · Interfaccia IRAI: ${sys.interfacciaIraiCollegata ? 'Collegata' : 'Non collegata'} (${sys.cavoInterfacciaResistenteFuoco})</td></tr>`,
+          ])
+          .join('')}
+        ${lineeAlimEvac
+          .map((l) => {
+            const r = calcolo.linee[l.id];
+            return `<tr><td class="mono">ALIM</td><td>Alimentazione Dedicata</td><td class="mono">${l.sigla}</td><td>${l.descrizione}</td><td>Protezione: ${r?.siglaProtezioneCompleta ?? ''} · Cavo: ${r?.siglaCavoCompleta ?? ''} (${l.lunghezzaM} m)</td></tr>`;
+          })
+          .join('')}
+      </tbody>
+    </table>
+  `;
+
+  downloadBlob(
+    new Blob(
+      [buildAppendiceAHtmlShell('Scheda Riassuntiva EVAC UNI 11988 A.3.2', progetto.identificativi.commessa, body)],
+      { type: 'application/msword;charset=utf-8' }
+    ),
+    `${progetto.identificativi.commessa}_EVAC_UNI11988_A32_Scheda_Riassuntiva.doc`
+  );
+}
+
+export function esportaEvacUni11988_RelazioneTecnicaA33(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  esiti: EsitoVerifica[],
+  formato: 'doc' | 'pdf' = 'doc'
+) {
+  const vociAda = calcolaProfiloAcusticoAdaEvac(progetto);
+  const ceEvac = progetto.sistemiIrai.flatMap((s) =>
+    s.causaEffetto
+      .filter((c) => c.attivaEvac)
+      .map((c) => ({
+        iraiSigla: s.sigla,
+        zona: s.zone.find((z) => z.id === c.causaZonaId)?.codice ?? 'TUTTE',
+        c,
+      }))
+  );
+  const lineeAlimEvac = progetto.linee.filter(
+    (l) =>
+      l.tipoUtenza === 'centrale_evac' ||
+      l.tipoUtenza === 'amplificatore_evac' ||
+      l.tipoUtenza === 'ups_sicurezza'
+  );
+  const nonConformiEvac = esiti.filter(
+    (e) => e.categoria === 'evac' && e.stato === 'non_conforme' && !e.derogata
+  );
+
+  if (formato === 'pdf') {
+    const { doc, addHeading, addParagraph, addBullets } = creaPdfAppendiceABuilder(
+      progetto,
+      calcolo,
+      'RELAZIONE TECNICO-DESCRITTIVA E ACUSTICA EVAC (UNI 11988:2025 — APPENDICE A.3.3)',
+      'UNI 11988:2025 Appendice A.3.3 & A.3.5'
+    );
+
+    addHeading('A.3.3 a) Planimetrie Edificio, Zone Allarme Vocale, Confini ADA e Postazioni Microfoniche');
+    addBullets([
+      `Riferimento sito: ${progetto.identificativi.sito} — Attività: ${progetto.attivitaNome} (Livello Prestazione ${progetto.livelloPrestazione}).`,
+      `Zone di allarme vocale e Aree Acusticamente Distinguibili (ADA) configurate: ${vociAda.map((v) => `${v.adaCodice} [${v.zonaNome}]`).join('; ') || 'Nessuna ADA configurata'}.`,
+      `Ubicazione microfoni di emergenza (sale di controllo / punti di presidio) e centrali VACIE (${progetto.sistemiEvac.map((s) => `${s.sigla} ${s.modelloCentrale}`).join(', ') || 'Nessuna'}): posa dedicata in centrale di controllo antincendio / reception presidiata, con indicazione planimetrica nelle tavole A.3.5.`,
+    ]);
+
+    addHeading('A.3.3 b) Piano di Gestione delle Emergenze (Priorità e Attivazioni IRAI-EVAC)');
+    addBullets([
+      'Gerarchia di priorità segnali VACIE (EN 54-16): 1) Microfono Vigili del Fuoco / Emergenza VdF; 2) Microfono di Emergenza di presidio locale; 3) Messaggio vocale preregistrato di evacuazione immediata; 4) Messaggio di allerta / pre-allarme; 5) Annunci operativi / musica di servizio (esclusi automaticamente in allarme).',
+      ...(ceEvac.length > 0
+        ? ceEvac.map(
+            (r) =>
+              `Attivazione IRAI ${r.iraiSigla} [Zona ${r.zona}]: ${r.c.causaDescrizione} -> Messaggio EVAC "${r.c.messaggioEvac || 'Evacuazione vocale'}" (ritardo ${r.c.ritardoSecondi} s).`
+          )
+        : ['Collegamento matrice Causa-Effetto IRAI <-> VACIE mediante interfaccia seriale/contatti sorvegliati resistenti al fuoco.']),
+    ]);
+
+    addHeading('A.3.3 c) Relazione Acustica — Elenco ADA, RT60 e Rumore Ambientale (125 Hz ÷ 8 kHz)');
+    if (vociAda.length === 0) {
+      addParagraph('Nessuna ADA / linea diffusori configurata.');
+    } else {
+      vociAda.forEach((v) => {
+        addParagraph(
+          `• ${v.adaCodice} (${v.sistemaSigla}/${v.lineaSigla} — ${v.zonaNome}): ${v.numDiffusori} diffusori (${v.potenzaSingoloDiffusoreW} W/pz, tot ${v.potenzaTotaleW} W)`,
+          true,
+          7.6,
+          15
+        );
+        addParagraph(
+          `  RT60 [125|250|500|1k|2k|4k|8k Hz] (s): ${v.rt60BandeS.join(' | ')} s`,
+          false,
+          7.3,
+          17
+        );
+        addParagraph(
+          `  Rumore ambientale [125..8k Hz] (dB): ${v.rumoreBandeDb.join(' | ')} dB — Fonte: ${v.fonteDatoRumore}`,
+          false,
+          7.3,
+          17
+        );
+      });
+    }
+
+    addHeading('A.3.3 d÷e) Condizioni Ambientali e Descrizione degli Ambienti di Installazione');
+    addBullets([
+      `Condizioni ambientali di progetto: Temperatura = ${progetto.ambiente.temperaturaAmbienteC} °C, grado di protezione minimo = ${progetto.ambiente.gradoIPRichiesto}, ambiente Ma.R.C.I. = ${progetto.ambiente.ambienteMarci ? 'Sì' : 'No'}; apparecchiature conformi a umidità relativa di progetto senza condensa, protezione da atmosfere corrosive e compatibilità EMC rispetto a forti campi elettromagnetici.`,
+      `Descrizione ambienti installazione (${progetto.ambiente.tipoLocale.replace(/_/g, ' ')}): le centrali VACIE e gli armadi amplificatori sono collocati in locale tecnico antincendio / centrale di controllo protetta; i diffusori acustici servono sia aree densamente occupate sia eventuali aree tecnicamente critiche/rumorose con adeguata pressione sonora SPL (>= +10÷15 dB sul rumore ambientale).`,
+    ]);
+
+    addHeading('A.3.3 f÷g) Criterio di Scelta Dispositivi e Dimensionamento Potenza Diffusori & Amplificatori');
+    progetto.sistemiEvac.forEach((sys) => {
+      const res = calcolo.evac[sys.id];
+      addParagraph(
+        `• VACIE ${sys.sigla} (${sys.modelloCentrale}): Potenza totale diffusori = ${res?.potenzaTotaleAltoparlantiW ?? 0} W | Richiesta con margine ${sys.marginePotenzaRichiestoPct}% = ${res?.potenzaRichiestaConMargineW ?? 0} W | Amplificatori attivi = ${res?.potenzaAmplificatoriAttiviW ?? 0} W | Riserva N+1: ${res?.haAmplificatoreRiserva ? 'Presente' : 'Assente'}.`,
+        false,
+        7.5,
+        15
+      );
+      sys.lineeAltoparlanti.forEach((ln) => {
+        const pUnit =
+          ln.numeroAltoparlanti > 0
+            ? (ln.potenzaTotaleAltoparlantiW / ln.numeroAltoparlanti).toFixed(2)
+            : '0';
+        const rl = res?.lineeRisultati.find((r) => r.lineaId === ln.id);
+        addParagraph(
+          `  - ${ln.sigla} (${ln.zonaNome}): ${ln.numeroAltoparlanti} diff. EN 54-24 × ${pUnit} W = ${ln.potenzaTotaleAltoparlantiW} W (carico amp ${rl?.caricoAmplificatorePct ?? 0}%)`,
+          false,
+          7.3,
+          17
+        );
+      });
+    });
+
+    addHeading('A.3.3 h) Calcolo dei Consumi e delle Autonomie (EN 54-4)');
+    progetto.sistemiEvac.forEach((sys) => {
+      const res = calcolo.evac[sys.id];
+      addParagraph(
+        `• EVAC ${sys.sigla}: Iq=${sys.correnteQuieteA}A (${sys.autonomiaQuieteRichiestaOre}h), Ia=${sys.correnteAllarmeA}A (${sys.autonomiaAllarmeRichiestaMin}min) -> Installata ${sys.capacitaBatterieInstallataAh} Ah >= Minima ${res?.capacitaBatterieMinimaAh ?? 0} Ah | ${res?.formulaBatterie ?? ''}`,
+        false,
+        7.4,
+        15
+      );
+    });
+
+    addHeading('A.3.3 i) Dimensionamento Cavi EVAC e Specifica Precisa Tipologia Cavi Ammessi');
+    progetto.sistemiEvac.forEach((sys) => {
+      const res = calcolo.evac[sys.id];
+      sys.lineeAltoparlanti.forEach((ln) => {
+        const rl = res?.lineeRisultati.find((r) => r.lineaId === ln.id);
+        addParagraph(
+          `• ${sys.sigla}/${ln.sigla} (${ln.zonaNome}): ${ln.lunghezzaM} m, ${ln.sezioneMm2} mm² ${ln.resistenzaFuoco}, ${ln.tensioneLineaV}V ${ln.topologia} -> ${rl?.formulaDettaglio ?? ''}`,
+          false,
+          7.2,
+          15
+        );
+      });
+    });
+    addBullets([
+      'Linee altoparlanti 100V/70V (radiali o ad anello con isolatori): cavi schermati a coppie twistate resistenti al fuoco conformi CEI 20-105 / CEI 20-45 / EN 50200 (minimo PH30; PH120 su dorsali e attraversamenti compartimenti), isolamento LS0H, guaina ROSSO/VIOLA, classe CPR >= Cca-s1b,d1,a1 (B2ca in vie esodo/Ma.R.C.I.).',
+      'Interconnessioni IRAI-VACIE e bus microfoni di emergenza: cavi schermati CEI 20-105 resistenti al fuoco PH120 (o PH30 ove ammesso in compartimento singolo) posati in condutture dedicate.',
+      'Alimentazioni primarie 230/400V per VACIE e armadi amplificatori: cavi FTG18OM16 PH120 CEI 20-45 derivati da quadro dedicato e separati dai circuiti ordinari (CEI 64-8 Cap. 56).',
+    ]);
+
+    addHeading('A.3.5 (a ÷ g) Requisiti per Disegni di Layout Grafico dell’Impianto EVAC');
+    addBullets([
+      'a) Orientamento della planimetria chiaramente indicato (rosa dei venti / Nord); b) Sezioni verticali di ogni piano con altezza di installazione altoparlanti ed elementi strutturali influenti (travi, controsoffitti, scaffalature); c) Ambienti esclusi dalla copertura; d-e) Tipologia/ubicazione di tutti i componenti e connessioni; f) Collegamento con eventuale presidio remoto di segnalazione; g) Legenda completa dei simboli utilizzati.',
+    ]);
+
+    doc.save(`${progetto.identificativi.commessa}_EVAC_UNI11988_A33_Relazione_Tecnica.pdf`);
+    return;
+  }
+
+  const body = `
+    <h1>RELAZIONE TECNICO-DESCRITTIVA E ACUSTICA EVAC (UNI 11988:2025 — APPENDICE A.3.3 &amp; A.3.5)</h1>
+    <div class="meta">
+      <strong>Commessa:</strong> ${progetto.identificativi.commessa} | <strong>Cliente:</strong> ${progetto.identificativi.cliente}<br/>
+      <strong>Sito / Attività:</strong> ${progetto.identificativi.sito} — ${progetto.attivitaNome} (Livello Prestazione: <strong>${progetto.livelloPrestazione}</strong>)<br/>
+      <strong>Progettista:</strong> ${progetto.identificativi.progettista} | <strong>Rev.:</strong> ${progetto.identificativi.revisione} del ${progetto.identificativi.data} | <strong>Motore:</strong> ElettroCAD ${calcolo.versioneApp}
+    </div>
+
+    <h2>A.3.3 a) Planimetrie Edificio, Zone Allarme Vocale, Confini ADA e Microfoni di Emergenza</h2>
+    <p>Le planimetrie di progetto (tavole <strong>A.3.5</strong>) individuano i confini delle zone di allarme vocale, la perimetrazione delle singole <strong>ADA (Aree Acusticamente Distinguibili)</strong> appartenenti a ciascuna zona, le postazioni dei <strong>microfoni di emergenza</strong> in sala di controllo / punti di presidio e l'ubicazione di tutte le unità VACIE, armadi rack amplificazione e diffusori sonori EN 54-24.</p>
+    <table>
+      <thead><tr><th>Codice ADA</th><th>Sistema / Linea</th><th>Zona Allarme Vocale</th><th>Ubicazione Microfoni / Presidio</th></tr></thead>
+      <tbody>
+        ${
+          vociAda.length === 0
+            ? '<tr><td colspan="4">Nessuna zona/ADA EVAC configurata.</td></tr>'
+            : vociAda
+                .map(
+                  (v) =>
+                    `<tr><td class="mono">${v.adaCodice}</td><td class="mono">${v.sistemaSigla} / ${v.lineaSigla}</td><td>${v.zonaNome}</td><td>Centrale di controllo / Punto di presidio antincendio (${v.sistemaSigla})</td></tr>`
+                )
+                .join('')
+        }
+      </tbody>
+    </table>
+
+    <h2>A.3.3 b) Piano di Gestione delle Emergenze</h2>
+    <p>Il sistema EVAC opera in integrazione bidirezionale con l'impianto di rivelazione incendio IRAI mediante matrice causa-effetto e livelli di priorità gerarchici conformi EN 54-16 / UNI 11988:2025:</p>
+    <ol>
+      <li><strong>Priorità 1 (Massima):</strong> Microfono di emergenza Vigili del Fuoco / postazione master antincendio (commutazione manuale immediata con interruzione di qualsiasi altro segnale).</li>
+      <li><strong>Priorità 2:</strong> Messaggi vocali di evacuazione preregistrati ad attivazione automatica da centrale IRAI secondo matrice Causa-Effetto.</li>
+      <li><strong>Priorità 3:</strong> Messaggi di preallarme / istruzioni selettive per singola zona o ADA in gestione fasi di sfollamento.</li>
+      <li><strong>Priorità 4 (Esclusa in emergenza):</strong> Diffusione annunci operativi o audio di servizio.</li>
+    </ol>
+    ${
+      ceEvac.length > 0
+        ? `<table>
+             <thead><tr><th>IRAI</th><th>Zona Origine</th><th>Evento Causa</th><th>Messaggio / Azione EVAC</th><th>Ritardo</th></tr></thead>
+             <tbody>
+               ${ceEvac
+                 .map(
+                   (r) =>
+                     `<tr><td class="mono">${r.iraiSigla}</td><td class="mono">${r.zona}</td><td>${r.c.causaDescrizione}</td><td>${r.c.messaggioEvac || 'Attivazione allarme vocale'}</td><td>${r.c.ritardoSecondi} s</td></tr>`
+                 )
+                 .join('')}
+             </tbody>
+           </table>`
+        : ''
+    }
+
+    <h2>A.3.3 c) Relazione Acustica — Elenco ADA, Tempo di Riverberazione (RT60) e Rumore Ambientale (125 Hz ÷ 8 kHz)</h2>
+    <p><strong>Criteri normativi UNI 11988:2025:</strong> per ciascuna ADA in ogni zona di emergenza sono riportati il tempo di riverberazione previsto o misurato e il livello di rumore ambientale per bande di ottava da <strong>125 Hz a 8 kHz</strong>. Negli edifici esistenti il rumore ambientale deve essere misurato direttamente in opera; nei nuovi edifici è ricavato da tabelle esistenti / <strong>Prospetto 24 della UNI 9795:2021</strong>.</p>
+    <h3>1) Elenco delle ADA per Zona di Emergenza EVAC</h3>
+    <table>
+      <thead><tr><th>Codice ADA</th><th>Sistema / Linea</th><th>Zona Emergenza</th><th>N. Diffusori</th><th>Potenza Singolo Diff.</th><th>Potenza Totale</th></tr></thead>
+      <tbody>
+        ${vociAda
+          .map(
+            (v) =>
+              `<tr><td class="mono">${v.adaCodice}</td><td class="mono">${v.sistemaSigla} / ${v.lineaSigla}</td><td>${v.zonaNome}</td><td>${v.numDiffusori}</td><td>${v.potenzaSingoloDiffusoreW} W</td><td>${v.potenzaTotaleW} W</td></tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>
+
+    <h3>2) Tempo di Riverberazione RT60 (s) per Bande di Ottava (125 Hz ÷ 8 kHz)</h3>
+    <table>
+      <thead><tr><th>Codice ADA</th><th>Zona</th>${BANDE_OTTAVA_HZ.map((b) => `<th>${b}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${vociAda
+          .map(
+            (v) =>
+              `<tr><td class="mono">${v.adaCodice}</td><td>${v.zonaNome}</td>${v.rt60BandeS
+                .map((rt) => `<td class="mono">${rt.toFixed(2)} s</td>`)
+                .join('')}</tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>
+
+    <h3>3) Livello di Rumore Ambientale (dB SPL) per Bande di Ottava (125 Hz ÷ 8 kHz)</h3>
+    <table>
+      <thead><tr><th>Codice ADA</th>${BANDE_OTTAVA_HZ.map((b) => `<th>${b}</th>`).join('')}<th>Origine Dato</th></tr></thead>
+      <tbody>
+        ${vociAda
+          .map(
+            (v) =>
+              `<tr><td class="mono">${v.adaCodice}</td>${v.rumoreBandeDb
+                .map((db) => `<td class="mono">${db} dB</td>`)
+                .join('')}<td>${v.fonteDatoRumore}</td></tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>
+
+    <h2>A.3.3 d÷e) Condizioni Ambientali e Descrizione degli Ambienti di Installazione</h2>
+    <table>
+      <tr><th>Parametro Ambientale (A.3.3 d)</th><th>Specifica di Progetto</th></tr>
+      <tr><td>Temperatura ambiente / Umidità</td><td>T<sub>amb</sub> = ${progetto.ambiente.temperaturaAmbienteC} °C; escursione igrometrica priva di condensa sulle apparecchiature VACIE/diffusori.</td></tr>
+      <tr><td>Atmosfera corrosiva / Campi EMC</td><td>Idoneità involucri e diffusori a grado minimo <strong>${progetto.ambiente.gradoIPRichiesto}</strong>; cavi schermati contro forti campi elettromagnetici; ambiente Ma.R.C.I.: <strong>${progetto.ambiente.ambienteMarci ? 'Sì' : 'No'}</strong>.</td></tr>
+      <tr><th>Descrizione Ambienti (A.3.3 e)</th><th>Tipologia e Protezione</th></tr>
+      <tr><td>Ambienti installazione apparecchiature</td><td>Tipologia prevalente: <strong>${progetto.ambiente.tipoLocale.replace(/_/g, ' ')}</strong>. Centrali VACIE e amplificatori installati in locale tecnico / centrale di controllo presidiata; diffusori dimensionati per aree densamente occupate ed eventuali aree potenzialmente pericolose o rumorose.</td></tr>
+    </table>
+
+    <h2>A.3.3 f÷g) Criterio di Scelta Dispositivi e Dimensionamento Potenza Diffusori &amp; Amplificatori</h2>
+    <p><strong>Criterio di scelta (A.3.3 f):</strong> apparecchiature di controllo e indicazione vocale (VACIE) certificate <strong>EN 54-16</strong>, alimentatori e caricabatterie <strong>EN 54-4</strong>, altoparlanti certificati <strong>EN 54-24</strong> (Tipo A/B in funzione di installazione interna/esterna) con selettore di presa di potenza a 100V/70V per garantire margine acustico rispetto al rumore ambientale e intelligibilità STI &ge; 0,50.</p>
+    <table>
+      <thead><tr><th>VACIE / Linea</th><th>Zona / ADA</th><th>N. Diff.</th><th>P<sub>diffusore</sub></th><th>P<sub>totale</sub></th><th>Carico Amp.</th><th>Verifica Amplificatori VACIE</th></tr></thead>
+      <tbody>
+        ${progetto.sistemiEvac
+          .flatMap((sys) => {
+            const res = calcolo.evac[sys.id];
+            return sys.lineeAltoparlanti.map((ln, idx) => {
+              const pUnit =
+                ln.numeroAltoparlanti > 0
+                  ? (ln.potenzaTotaleAltoparlantiW / ln.numeroAltoparlanti).toFixed(2)
+                  : '0';
+              const rl = res?.lineeRisultati.find((r) => r.lineaId === ln.id);
+              const riepilogoAmp =
+                idx === 0
+                  ? `Attivi ${res?.potenzaAmplificatoriAttiviW ?? 0} W vs Rich. ${res?.potenzaRichiestaConMargineW ?? 0} W (marg. ${sys.marginePotenzaRichiestoPct}%, Riserva N+1: ${res?.haAmplificatoreRiserva ? 'Sì' : 'No'})`
+                  : 'Vedi sistema VACIE';
+              return `<tr><td class="mono">${sys.sigla} / ${ln.sigla}</td><td>${ln.zonaNome}</td><td>${ln.numeroAltoparlanti}</td><td>${pUnit} W</td><td>${ln.potenzaTotaleAltoparlantiW} W</td><td>${rl?.caricoAmplificatorePct ?? 0}%</td><td>${riepilogoAmp}</td></tr>`;
+            });
+          })
+          .join('')}
+      </tbody>
+    </table>
+
+    <h2>A.3.3 h) Calcolo Analitico dei Consumi e delle Autonomie (EN 54-4)</h2>
+    <table>
+      <thead><tr><th>Sistema VACIE</th><th>I<sub>q</sub> / I<sub>a</sub></th><th>Autonomia Richiesta</th><th>Installata vs Minima</th><th>Formula Applicata</th></tr></thead>
+      <tbody>
+        ${progetto.sistemiEvac
+          .map((sys) => {
+            const res = calcolo.evac[sys.id];
+            return `<tr><td class="mono">${sys.sigla} — ${sys.nome}</td><td>${sys.correnteQuieteA} A / ${sys.correnteAllarmeA} A</td><td>${sys.autonomiaQuieteRichiestaOre} h + ${sys.autonomiaAllarmeRichiestaMin} min</td><td><strong>${sys.capacitaBatterieInstallataAh} Ah</strong> &ge; ${res?.capacitaBatterieMinimaAh ?? 0} Ah</td><td class="mono">${res?.formulaBatterie ?? ''}</td></tr>`;
+          })
+          .join('')}
+      </tbody>
+    </table>
+
+    <h2>A.3.3 i) Dimensionamento dei Cavi e Specifica Tecnica Precisa dei Cavi Ammessi</h2>
+    <h3>Linee Altoparlanti 100V / 70V</h3>
+    <table>
+      <thead><tr><th>VACIE / Linea</th><th>Zona</th><th>Topologia / Carico</th><th>L / Sez. / Res. Fuoco</th><th>I (A)</th><th>ΔV (V / %)</th><th>Att. / L<sub>max</sub></th><th>Esito</th></tr></thead>
+      <tbody>
+        ${progetto.sistemiEvac
+          .flatMap((sys) => {
+            const res = calcolo.evac[sys.id];
+            return sys.lineeAltoparlanti.map((ln) => {
+              const rl = res?.lineeRisultati.find((r) => r.lineaId === ln.id);
+              return `<tr><td class="mono">${sys.sigla} / ${ln.sigla}</td><td>${ln.zonaNome}</td><td>${ln.topologia} (${ln.distribuzioneCarico ?? 'concentrato'})</td><td>${ln.lunghezzaM}m · ${ln.sezioneMm2}mm² · ${ln.resistenzaFuoco}</td><td>${rl?.correnteLineaA ?? 0}</td><td>${rl?.cadutaTensioneV ?? 0}V (${rl?.cadutaTensionePct ?? 0}%)</td><td>${rl?.attenuazioneDb ?? 0}dB / ${rl?.lunghezzaMassimaAmmissibileM ?? 0}m</td><td><strong>${rl?.conformeCadutaTensione ? 'CONFORME' : `NON CONFORME (min ${rl?.sezioneMinimaConsigliataMm2}mm²)`}</strong></td></tr>`;
+            });
+          })
+          .join('')}
+      </tbody>
+    </table>
+
+    ${
+      lineeAlimEvac.length > 0
+        ? `<h3>Linee di Alimentazione Dedicate EVAC / UPS</h3>
+           <table>
+             <thead><tr><th>Linea</th><th>Utenza</th><th>Protezione</th><th>Cavo / Resistenza Fuoco</th><th>L (m)</th><th>I<sub>b</sub> / I<sub>z</sub> (A)</th><th>ΔV (%)</th></tr></thead>
+             <tbody>
+               ${lineeAlimEvac
+                 .map((l) => {
+                   const rl = calcolo.linee[l.id];
+                   return `<tr><td class="mono">${l.sigla}</td><td>${l.descrizione}</td><td>${rl?.siglaProtezioneCompleta ?? ''}</td><td>${rl?.siglaCavoCompleta ?? ''}</td><td>${l.lunghezzaM}</td><td>${rl?.correnteImpiegoIbA ?? 0} / ${rl?.portataCorrettaIzA ?? 0}</td><td>${rl?.cadutaTensionePct ?? 0}%</td></tr>`;
+                 })
+                 .join('')}
+             </tbody>
+           </table>`
+        : ''
+    }
+
+    <div class="box">
+      <strong>Indicazione Tecnica Precisa dei Cavi Ammessi per Collegamento (UNI 11988:2025 A.3.3 i):</strong>
+      <ul>
+        <li><strong>Linee altoparlanti 100V/70V (dorsali e diramazioni):</strong> cavi schermati a coppie cordate (twistate) resistenti al fuoco conformi <strong>CEI 20-105 / CEI 20-45 / EN 50200</strong> con prestazione minima <strong>PH30</strong> (o <strong>PH120</strong> per montanti, attraversamenti di compartimento o vie di esodo critiche), isolamento LS0H, guaina di colore distintivo <strong>ROSSO o VIOLA</strong>, classe CPR &ge; C<sub>ca</sub>-s1b,d1,a1 (B2<sub>ca</sub> in ambienti Ma.R.C.I.).</li>
+        <li><strong>Collegamento di interconnessione IRAI &harr; VACIE e bus microfoni di emergenza:</strong> cavi schermati resistenti al fuoco <strong>CEI 20-105 PH120</strong> (o PH30 entro compartimento protetto) in tubazione/canale dedicato e separato da circuiti ordinari.</li>
+        <li><strong>Alimentazione elettrica primaria 230/400 V VACIE e rack amplificatori:</strong> cavo resistente al fuoco tipo <strong>FTG18OM16 PH120</strong> (CEI 20-45 / EN 50200) posato in via esclusiva a monte dell'interruttore generale ordinario (CEI 64-8 Cap. 56).</li>
+      </ul>
+    </div>
+
+    <h2>A.3.5 (a ÷ g) Checklist Obbligatoria per Disegni di Layout Grafico dell'Impianto EVAC</h2>
+    <ul>
+      <li><strong>a)</strong> Orientamento della planimetria chiaramente indicato su ogni tavola di piano;</li>
+      <li><strong>b)</strong> Sezioni verticali di ciascun piano dell'edificio con indicazione delle quote di posizionamento degli altoparlanti ed elementi strutturali che ne influenzano la collocazione;</li>
+      <li><strong>c)</strong> Individuazione chiara degli ambienti esclusi dalla copertura acustica del sistema EVAC;</li>
+      <li><strong>d)</strong> Tipologia e ubicazione esatta di tutti i componenti costituenti l'impianto (VACIE, amplificatori, microfoni, diffusori, isolatori);</li>
+      <li><strong>e)</strong> Tipologia e tracciato di tutte le connessioni fra i componenti dell'impianto (linee radiali/anello, interfacce, alimentazioni);</li>
+      <li><strong>f)</strong> Posizione e caratteristiche di ogni collegamento con eventuale presidio remoto di segnalazione;</li>
+      <li><strong>g)</strong> Legenda completa dei simboli utilizzati (coordinata con gli schemi DXF A.3.4 e A.3.6).</li>
+    </ul>
+
+    <p class="mono">Esiti verifiche EVAC attive: ${esiti.filter((e) => e.categoria === 'evac').length} verifiche | Non conformità aperte: ${nonConformiEvac.length}.</p>
+  `;
+
+  downloadBlob(
+    new Blob(
+      [buildAppendiceAHtmlShell('Relazione Tecnica e Acustica EVAC UNI 11988 A.3.3', progetto.identificativi.commessa, body)],
+      { type: 'application/msword;charset=utf-8' }
+    ),
+    `${progetto.identificativi.commessa}_EVAC_UNI11988_A33_Relazione_Tecnica.doc`
+  );
+}
+
+export function esportaEvacUni11988_ElencoComponentiAcusticaXlsx(
+  progetto: ProgettoAntincendio,
+  calcolo: RisultatoCalcoloCompleto,
+  esiti: EsitoVerifica[]
+) {
+  const wb = XLSX.utils.book_new();
+
+  const registro = costruisciRegistroElaboratiEvacUni11988(progetto).map((r) => ({
+    Numero_Riferimento: r.codice,
+    Rif_UNI_11988: r.riferimentoAppendiceA,
+    Titolo_Elaborato: r.titolo,
+    Emissione: r.emissione,
+    Data: r.data,
+    Formato: r.formato,
+  }));
+
+  const vacieAmpl = progetto.sistemiEvac.flatMap((sys) => {
+    const res = calcolo.evac[sys.id];
+    return [
+      {
+        VACIE_Sigla: sys.sigla,
+        Tipo_Elemento: 'Centrale VACIE (EN 54-16 / EN 54-4)',
+        Modello: sys.modelloCentrale,
+        Potenza_W: res?.potenzaAmplificatoriAttiviW ?? 0,
+        Ruolo_Dettagli: `${sys.nome} | Riserva N+1: ${res?.haAmplificatoreRiserva ? 'Sì' : 'No'} | Batt: ${sys.capacitaBatterieInstallataAh}Ah (min ${res?.capacitaBatterieMinimaAh ?? 0}Ah)`,
+      },
+      ...sys.amplificatori.map((a) => ({
+        VACIE_Sigla: sys.sigla,
+        Tipo_Elemento: 'Amplificatore Potenza (EN 54-16)',
+        Modello: `${a.sigla} — ${a.modello}`,
+        Potenza_W: a.potenzaNominaleW,
+        Ruolo_Dettagli: a.diRiserva ? 'Amplificatore di Riserva N+1' : 'Amplificatore Attivo',
+      })),
+    ];
+  });
+
+  const lineeDiffusori = progetto.sistemiEvac.flatMap((sys) => {
+    const res = calcolo.evac[sys.id];
+    return sys.lineeAltoparlanti.map((ln) => {
+      const rl = res?.lineeRisultati.find((r) => r.lineaId === ln.id);
+      const pUnit =
+        ln.numeroAltoparlanti > 0
+          ? Number((ln.potenzaTotaleAltoparlantiW / ln.numeroAltoparlanti).toFixed(2))
+          : 0;
+      return {
+        VACIE: sys.sigla,
+        Linea_Sigla: ln.sigla,
+        Zona_ADA: ln.zonaNome,
+        Topologia: ln.topologia,
+        Distribuzione: ln.distribuzioneCarico ?? 'concentrato',
+        Tensione_V: ln.tensioneLineaV,
+        N_Diffusori_EN54_24: ln.numeroAltoparlanti,
+        Potenza_Singolo_Diffusore_W: pUnit,
+        Potenza_Totale_W: ln.potenzaTotaleAltoparlantiW,
+        Lunghezza_m: ln.lunghezzaM,
+        Sezione_mm2: ln.sezioneMm2,
+        Resistenza_Fuoco: ln.resistenzaFuoco,
+        Corrente_A: rl?.correnteLineaA ?? 0,
+        DeltaV_V: rl?.cadutaTensioneV ?? 0,
+        DeltaV_Pct: rl?.cadutaTensionePct ?? 0,
+        Attenuazione_dB: rl?.attenuazioneDb ?? 0,
+        L_Max_Ammissibile_m: rl?.lunghezzaMassimaAmmissibileM ?? 0,
+        Sez_Min_Consigliata_mm2: rl?.sezioneMinimaConsigliataMm2 ?? ln.sezioneMm2,
+        Conforme_Caduta: rl?.conformeCadutaTensione ? 'Sì' : 'No',
+      };
+    });
+  });
+
+  const acusticaAda = calcolaProfiloAcusticoAdaEvac(progetto).map((v) => ({
+    Codice_ADA: v.adaCodice,
+    VACIE_Linea: `${v.sistemaSigla}/${v.lineaSigla}`,
+    Zona_Emergenza: v.zonaNome,
+    RT60_125Hz_s: v.rt60BandeS[0],
+    RT60_250Hz_s: v.rt60BandeS[1],
+    RT60_500Hz_s: v.rt60BandeS[2],
+    RT60_1kHz_s: v.rt60BandeS[3],
+    RT60_2kHz_s: v.rt60BandeS[4],
+    RT60_4kHz_s: v.rt60BandeS[5],
+    RT60_8kHz_s: v.rt60BandeS[6],
+    Rumore_125Hz_dB: v.rumoreBandeDb[0],
+    Rumore_250Hz_dB: v.rumoreBandeDb[1],
+    Rumore_500Hz_dB: v.rumoreBandeDb[2],
+    Rumore_1kHz_dB: v.rumoreBandeDb[3],
+    Rumore_2kHz_dB: v.rumoreBandeDb[4],
+    Rumore_4kHz_dB: v.rumoreBandeDb[5],
+    Rumore_8kHz_dB: v.rumoreBandeDb[6],
+    Fonte_Dato: v.fonteDatoRumore,
+  }));
+
+  const autonomieAlim = [
+    ...progetto.sistemiEvac.map((sys) => {
+      const res = calcolo.evac[sys.id];
+      return {
+        Categoria: 'Alimentazione Secondaria VACIE (EN 54-4)',
+        Sigla: sys.sigla,
+        Descrizione: sys.nome,
+        Quiete_Ore: sys.autonomiaQuieteRichiestaOre,
+        Allarme_Min: sys.autonomiaAllarmeRichiestaMin,
+        Iq_A: sys.correnteQuieteA,
+        Ia_A: sys.correnteAllarmeA,
+        Batt_Installata_Ah: sys.capacitaBatterieInstallataAh,
+        Batt_Minima_Ah: res?.capacitaBatterieMinimaAh ?? 0,
+        Dettagli_Formula: res?.formulaBatterie ?? '',
+      };
+    }),
+    ...progetto.linee
+      .filter(
+        (l) =>
+          l.tipoUtenza === 'centrale_evac' ||
+          l.tipoUtenza === 'amplificatore_evac' ||
+          l.tipoUtenza === 'ups_sicurezza'
+      )
+      .map((l) => {
+        const rl = calcolo.linee[l.id];
+        return {
+          Categoria: 'Linea Alimentazione Primaria 230/400V',
+          Sigla: l.sigla,
+          Descrizione: l.descrizione,
+          Quiete_Ore: 0,
+          Allarme_Min: 0,
+          Iq_A: rl?.correnteImpiegoIbA ?? 0,
+          Ia_A: rl?.portataCorrettaIzA ?? 0,
+          Batt_Installata_Ah: l.lunghezzaM,
+          Batt_Minima_Ah: rl?.cadutaTensionePct ?? 0,
+          Dettagli_Formula: `${rl?.siglaProtezioneCompleta ?? ''} | ${rl?.siglaCavoCompleta ?? ''}`,
+        };
+      }),
+  ];
+
+  const causaEffettoEvac = progetto.sistemiIrai.flatMap((sys) =>
+    sys.causaEffetto
+      .filter((c) => c.attivaEvac)
+      .map((c) => ({
+        Centrale_IRAI: sys.sigla,
+        Zona_Origine: sys.zone.find((z) => z.id === c.causaZonaId)?.codice ?? 'TUTTE',
+        Evento_Causa: c.causaDescrizione,
+        Messaggio_EVAC: c.messaggioEvac || 'Evacuazione vocale',
+        Ritardo_s: c.ritardoSecondi,
+        Targhe_OA: c.attivaTargheOtticoAcustiche ? 'Sì' : 'No',
+        Sgancio_Impianti: c.sgancioImpiantiTecnologici ? 'Sì' : 'No',
+      }))
+  );
+
+  const conformita = esiti
+    .filter((e) => e.categoria === 'evac' || e.targetLabel.toLowerCase().includes('evac'))
+    .map((e) => ({
+      Codice: e.codice,
+      Oggetto: e.targetLabel,
+      Stato: e.stato,
+      Valore_Calcolato: e.valoreCalcolato,
+      Soglia_Attesa: e.sogliaAttesa,
+      Derogata: e.derogata ? 'Sì' : 'No',
+      Motivazione_Deroga: e.motivazioneDeroga ?? '',
+    }));
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(registro), 'Registro Elaborati EVAC');
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(vacieAmpl.length ? vacieAmpl : [{ Nota: 'Nessun sistema EVAC configurato' }]),
+    'VACIE e Amplificatori'
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(lineeDiffusori.length ? lineeDiffusori : [{ Nota: 'Nessuna linea diffusori' }]),
+    'Diffusori e Linee 100V'
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(acusticaAda.length ? acusticaAda : [{ Nota: 'Nessuna ADA configurata' }]),
+    'ADA Acustica 125Hz-8kHz'
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(autonomieAlim.length ? autonomieAlim : [{ Nota: 'Nessun dato alimentazione EVAC' }]),
+    'Autonomie e Alimentazioni'
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(
+      causaEffettoEvac.length ? causaEffettoEvac : [{ Nota: 'Nessuna attivazione EVAC in Causa-Effetto' }]
+    ),
+    'Causa-Effetto IRAI-EVAC'
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(conformita.length ? conformita : [{ Nota: 'Nessuna verifica EVAC registrata' }]),
+    'Conformità UNI 11988'
+  );
+
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  downloadBlob(
+    new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    `${progetto.identificativi.commessa}_EVAC_UNI11988_Componenti_Acustica.xlsx`
+  );
+}
+
 
 

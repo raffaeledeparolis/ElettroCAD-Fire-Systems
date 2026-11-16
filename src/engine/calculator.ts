@@ -365,14 +365,24 @@ export function calcolaProgettoCompleto(
   const iraiRes: Record<string, RisultatoCalcoloIRAI> = {};
   for (const sys of progetto.sistemiIrai) {
     const loopRisultati: RisultatoCalcoloLoop[] = sys.loop.map((lp) => {
-      const iqMa = lp.dispositivi.reduce((s, d) => s + d.correnteQuieteMa, 0);
-      const iaMa = lp.dispositivi.reduce((s, d) => s + d.correnteAllarmeMa, 0);
+      const iqMa = lp.dispositivi.reduce(
+        (s, d) => s + d.correnteQuieteMa * Math.max(1, d.quantita ?? 1),
+        0
+      );
+      const iaMa = lp.dispositivi.reduce(
+        (s, d) => s + d.correnteAllarmeMa * Math.max(1, d.quantita ?? 1),
+        0
+      );
+      const numDisp = lp.dispositivi.reduce(
+        (s, d) => s + Math.max(1, d.quantita ?? 1),
+        0
+      );
       // Caduta di tensione su loop (resistenza totale cavo andata+ritorno, carico distribuito /2)
       const rLoop = (2 * lp.lunghezzaM * 0.018) / Math.max(0.5, lp.sezioneCavoMm2);
       const dvLoop = (iaMa / 1000) * (rLoop / 2);
       return {
         loopId: lp.id,
-        numeroDispositivi: lp.dispositivi.length,
+        numeroDispositivi: numDisp,
         correnteQuieteMa: Number(iqMa.toFixed(2)),
         correnteAllarmeMa: Number(iaMa.toFixed(2)),
         cadutaTensioneLoopV: Number(dvLoop.toFixed(3)),

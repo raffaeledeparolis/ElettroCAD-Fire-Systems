@@ -132,6 +132,20 @@ export interface LineaUtenza {
   simboloCodice: string;
 }
 
+export interface ComponenteAnagraficaIRAI {
+  id: string;
+  codice: string;
+  costruttore: string;
+  modello: string;
+  tipo: 'rivelatore_ottico' | 'rivelatore_termico' | 'pulsante_manuale' | 'targa_ottico_acustica' | 'modulo_ingresso' | 'modulo_uscita';
+  descrizione: string;
+  correnteQuieteMa: number;
+  correnteAllarmeMa: number;
+  normaRiferimento: string;
+  simboloCodice: string;
+  note?: string;
+}
+
 export interface DispositivoIRAI {
   id: string;
   indirizzo: number;
@@ -139,6 +153,11 @@ export interface DispositivoIRAI {
   tipo: 'rivelatore_ottico' | 'rivelatore_termico' | 'pulsante_manuale' | 'targa_ottico_acustica' | 'modulo_ingresso' | 'modulo_uscita';
   zonaId: string;
   descrizione: string;
+  quantita?: number;
+  anagraficaComponenteId?: string;
+  codiceArticolo?: string;
+  costruttore?: string;
+  modello?: string;
   correnteQuieteMa: number;
   correnteAllarmeMa: number;
   simboloCodice: string;
@@ -191,6 +210,7 @@ export interface SistemaIRAI {
   loop: LoopIRAI[];
   zone: ZonaIRAI[];
   causaEffetto: RigaCausaEffetto[];
+  anagraficaComponenti?: ComponenteAnagraficaIRAI[];
 }
 
 export interface AmplificatoreEVAC {

@@ -13,6 +13,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
+import { ANAGRAFICA_COMPONENTI_IRAI_DEFAULT } from '../data/rulesAndLibrary';
 import { SEZIONI_EVAC_STANDARD } from '../engine/calculator';
 import {
   esportaExcelRiepilogoSistemaIrai,
@@ -20,6 +21,7 @@ import {
 } from '../engine/exporters';
 import {
   ClasseCPR,
+  ComponenteAnagraficaIRAI,
   CurvaIntervento,
   DispositivoIRAI,
   DistribuzioneCaricoEVAC,
@@ -34,6 +36,7 @@ import {
   RigaCausaEffetto,
   RisultatoCalcoloCompleto,
   SistemaDistribuzione,
+  SistemaEVAC,
   TemplateTavolaDXF,
   TipoAvviamento,
   TipoPosa,
@@ -83,7 +86,7 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
     'guidata' | 'avanzata'
   >('guidata');
   const [ispettoreAperto, setIspettoreAperto] = useState(true);
-  const [iraiSubTab, setIraiSubTab] = useState<'zone' | 'loop' | 'causa_effetto' | 'batterie'>('loop');
+  const [iraiSubTab, setIraiSubTab] = useState<'zone' | 'anagrafica' | 'loop' | 'causa_effetto' | 'batterie'>('loop');
   const [nuovaZonaCodice, setNuovaZonaCodice] = useState('');
   const [nuovaZonaNome, setNuovaZonaNome] = useState('');
   const [nuovoDispTipoPerLoop, setNuovoDispTipoPerLoop] = useState<
@@ -92,6 +95,20 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
   const [nuovoDispZonaPerLoop, setNuovoDispZonaPerLoop] = useState<
     Record<string, string>
   >({});
+  const [nuovoDispQuantitaPerLoop, setNuovoDispQuantitaPerLoop] = useState<
+    Record<string, number>
+  >({});
+  const [nuovoDispAnagraficaPerLoop, setNuovoDispAnagraficaPerLoop] = useState<
+    Record<string, string>
+  >({});
+  const [nuovoCompCodice, setNuovoCompCodice] = useState('');
+  const [nuovoCompCostruttore, setNuovoCompCostruttore] = useState('Notifier / EN 54');
+  const [nuovoCompModello, setNuovoCompModello] = useState('');
+  const [nuovoCompTipo, setNuovoCompTipo] = useState<DispositivoIRAI['tipo']>('rivelatore_ottico');
+  const [nuovoCompNorma, setNuovoCompNorma] = useState('EN 54-7');
+  const [nuovoCompIq, setNuovoCompIq] = useState(0.35);
+  const [nuovoCompIa, setNuovoCompIa] = useState(5.5);
+  const [nuovoCompDescrizione, setNuovoCompDescrizione] = useState('');
 
   const PRESET_DISPOSITIVI_IRAI: Record<
     DispositivoIRAI['tipo'],
@@ -363,6 +380,7 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
             },
           ],
           causaEffetto: [],
+          anagraficaComponenti: ANAGRAFICA_COMPONENTI_IRAI_DEFAULT,
         },
       ],
     }));
@@ -416,6 +434,83 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
       ],
     }));
     setNodoAttivo({ tipo: 'evac', sistemaId: id });
+  };
+
+  const duplicaSistemaEvac = (sistemaId: string) => {
+    const target = progetto.sistemiEvac.find((s) => s.id === sistemaId);
+    if (!target) return;
+
+    const sigleEsistenti = new Set(
+      progetto.sistemiEvac.map((s) => s.sigla.trim().toUpperCase())
+    );
+    const match = target.sigla.trim().match(/^(.*?)(\d+)$/);
+    let nuovaSigla = `${target.sigla.trim()}-2`;
+    if (match) {
+      const prefisso = match[1];
+      const numStr = match[2];
+      let num = parseInt(numStr, 10) + 1;
+      while (
+        sigleEsistenti.has(
+          `${prefisso}${String(num).padStart(numStr.length, '0')}`.toUpperCase()
+        )
+      ) {
+        num += 1;
+      }
+      nuovaSigla = `${prefisso}${String(num).padStart(numStr.length, '0')}`;
+    } else {
+      let suff = 2;
+      while (sigleEsistenti.has(`${target.sigla.trim()}-${suff}`.toUpperCase())) {
+        suff += 1;
+      }
+      nuovaSigla = `${target.sigla.trim()}-${suff}`;
+    }
+
+    const now = Date.now();
+    const rand = Math.random().toString(36).slice(2, 5);
+    const ampIdMap: Record<string, string> = {};
+    const clonedAmplificatori = target.amplificatori.map((amp, idx) => {
+      const newAmpId = `amp-${now}-${idx}-${rand}`;
+      ampIdMap[amp.id] = newAmpId;
+      return {
+        ...amp,
+        id: newAmpId,
+      };
+    });
+
+    const clonedLineeAltoparlanti = target.lineeAltoparlanti.map((ln, idx) => ({
+      ...ln,
+      id: `spk-${now}-${idx}-${rand}`,
+      amplificatoreId:
+        ampIdMap[ln.amplificatoreId] ?? clonedAmplificatori[0]?.id ?? '',
+    }));
+
+    const duplicato: SistemaEVAC = {
+      ...target,
+      id: `evac-${now}-${rand}`,
+      sigla: nuovaSigla,
+      nome: `${target.nome} (Copia)`,
+      amplificatori: clonedAmplificatori,
+      lineeAltoparlanti: clonedLineeAltoparlanti,
+    };
+
+    onAggiornaProgetto(
+      (p) => {
+        const idx = p.sistemiEvac.findIndex((s) => s.id === sistemaId);
+        if (idx === -1) {
+          return { ...p, sistemiEvac: [...p.sistemiEvac, duplicato] };
+        }
+        const nextEvac = [...p.sistemiEvac];
+        nextEvac.splice(idx + 1, 0, duplicato);
+        return { ...p, sistemiEvac: nextEvac };
+      },
+      {
+        sezione: 'Sistemi EVAC',
+        campo: 'Duplicazione sistema EVAC',
+        prevVal: `${target.sigla} (${target.nome})`,
+        newVal: `${duplicato.sigla} (${duplicato.nome})`,
+      }
+    );
+    setNodoAttivo({ tipo: 'evac', sistemaId: duplicato.id });
   };
 
   const sysIraiAttivo =
@@ -587,21 +682,34 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
               </div>
             ) : (
               progetto.sistemiEvac.map((s) => (
-                <button
+                <div
                   key={s.id}
-                  type="button"
-                  onClick={() => setNodoAttivo({ tipo: 'evac', sistemaId: s.id })}
-                  className={`flex w-full items-center justify-between rounded px-2.5 py-1.5 text-left cursor-pointer ${
+                  className={`group flex w-full items-center justify-between rounded px-2.5 py-1.5 ${
                     nodoAttivo.tipo === 'evac' && nodoAttivo.sistemaId === s.id
                       ? 'bg-blue-50 font-semibold text-blue-800'
                       : 'text-slate-700 hover:bg-slate-50'
                   }`}
                 >
-                  <span className="truncate">
+                  <button
+                    type="button"
+                    onClick={() => setNodoAttivo({ tipo: 'evac', sistemaId: s.id })}
+                    className="flex-1 min-w-0 truncate text-left cursor-pointer"
+                  >
                     <span className="font-mono mr-1.5">{s.sigla}</span>
                     {s.lineeAltoparlanti.length} zone 100V
-                  </span>
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      duplicaSistemaEvac(s.id);
+                    }}
+                    title={`Duplica sistema EVAC ${s.sigla}`}
+                    className="ml-1 shrink-0 rounded p-0.5 text-slate-400 opacity-0 group-hover:opacity-100 hover:bg-blue-100 hover:text-blue-700 cursor-pointer"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -1696,6 +1804,10 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                       {(
                         [
                           ['zone', `Anagrafica Zone (${sysIraiAttivo.zone.length})`],
+                          [
+                            'anagrafica',
+                            `Anagrafica Componenti (${(sysIraiAttivo.anagraficaComponenti ?? ANAGRAFICA_COMPONENTI_IRAI_DEFAULT).length})`,
+                          ],
                           ['loop', `Loop & Dispositivi (${sysIraiAttivo.loop.length})`],
                           ['causa_effetto', `Matrice Causa-Effetto (${sysIraiAttivo.causaEffetto.length})`],
                           ['batterie', 'Alimentatore & Batterie'],
@@ -1789,7 +1901,10 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                           {sysIraiAttivo.zone.map((z) => {
                             const nDisp = sysIraiAttivo.loop.reduce(
                               (acc, l) =>
-                                acc + l.dispositivi.filter((d) => d.zonaId === z.id).length,
+                                acc +
+                                l.dispositivi
+                                  .filter((d) => d.zonaId === z.id)
+                                  .reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0),
                               0
                             );
                             const coperta = sysIraiAttivo.causaEffetto.some(
@@ -1910,6 +2025,602 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                   </div>
                 )}
 
+                {iraiSubTab === 'anagrafica' && (() => {
+                  const anagraficaLista =
+                    sysIraiAttivo.anagraficaComponenti ?? ANAGRAFICA_COMPONENTI_IRAI_DEFAULT;
+
+                  const aggiornaAnagrafica = (
+                    updater: (curr: ComponenteAnagraficaIRAI[]) => ComponenteAnagraficaIRAI[],
+                    audit?: { campo: string; prevVal: string; newVal: string }
+                  ) => {
+                    onAggiornaProgetto(
+                      (p) => ({
+                        ...p,
+                        sistemiIrai: p.sistemiIrai.map((sys) => {
+                          if (sys.id !== sysIraiAttivo.id) return sys;
+                          const curr =
+                            sys.anagraficaComponenti ?? ANAGRAFICA_COMPONENTI_IRAI_DEFAULT;
+                          return { ...sys, anagraficaComponenti: updater(curr) };
+                        }),
+                      }),
+                      audit
+                        ? {
+                            sezione: `${sysIraiAttivo.sigla} · Anagrafica Componenti`,
+                            ...audit,
+                          }
+                        : undefined
+                    );
+                  };
+
+                  // Aggregazione quantità installate sui loop per distinta riepilogativa
+                  const mappaDistinta = new Map<
+                    string,
+                    {
+                      chiave: string;
+                      simboloCodice: string;
+                      codice: string;
+                      modello: string;
+                      costruttore: string;
+                      tipo: DispositivoIRAI['tipo'];
+                      descrizione: string;
+                      quantitaTot: number;
+                      iqTotMa: number;
+                      iaTotMa: number;
+                      loops: Set<string>;
+                      zone: Set<string>;
+                    }
+                  >();
+
+                  sysIraiAttivo.loop.forEach((lp) => {
+                    lp.dispositivi.forEach((d) => {
+                      const qta = Math.max(1, d.quantita ?? 1);
+                      const rifAnag = anagraficaLista.find(
+                        (a) =>
+                          a.id === d.anagraficaComponenteId ||
+                          (d.codiceArticolo && a.codice === d.codiceArticolo)
+                      );
+                      const codice = d.codiceArticolo || rifAnag?.codice || d.tipo.toUpperCase();
+                      const modello =
+                        d.modello || rifAnag?.modello || PRESET_DISPOSITIVI_IRAI[d.tipo].label;
+                      const costruttore = d.costruttore || rifAnag?.costruttore || 'Standard EN 54';
+                      const key = `${codice}::${modello}::${d.tipo}`;
+                      const zCod =
+                        sysIraiAttivo.zone.find((z) => z.id === d.zonaId)?.codice ?? '—';
+                      const existing = mappaDistinta.get(key);
+                      if (existing) {
+                        existing.quantitaTot += qta;
+                        existing.iqTotMa += d.correnteQuieteMa * qta;
+                        existing.iaTotMa += d.correnteAllarmeMa * qta;
+                        existing.loops.add(lp.sigla);
+                        existing.zone.add(zCod);
+                      } else {
+                        mappaDistinta.set(key, {
+                          chiave: key,
+                          simboloCodice: d.simboloCodice,
+                          codice,
+                          modello,
+                          costruttore,
+                          tipo: d.tipo,
+                          descrizione: rifAnag?.descrizione || d.descrizione,
+                          quantitaTot: qta,
+                          iqTotMa: d.correnteQuieteMa * qta,
+                          iaTotMa: d.correnteAllarmeMa * qta,
+                          loops: new Set([lp.sigla]),
+                          zone: new Set([zCod]),
+                        });
+                      }
+                    });
+                  });
+
+                  const distintaInstallati = Array.from(mappaDistinta.values());
+                  const totPzDistinta = distintaInstallati.reduce(
+                    (s, r) => s + r.quantitaTot,
+                    0
+                  );
+                  const totIqDistinta = distintaInstallati.reduce(
+                    (s, r) => s + r.iqTotMa,
+                    0
+                  );
+                  const totIaDistinta = distintaInstallati.reduce(
+                    (s, r) => s + r.iaTotMa,
+                    0
+                  );
+
+                  return (
+                    <div className="space-y-4">
+                      {/* Form inserimento nuovo componente in anagrafica */}
+                      <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2.5 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-slate-900">
+                            Nuovo Componente in Anagrafica ({sysIraiAttivo.sigla})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              aggiornaAnagrafica(
+                                (curr) => {
+                                  const existingIds = new Set(curr.map((c) => c.id));
+                                  const mancanti = ANAGRAFICA_COMPONENTI_IRAI_DEFAULT.filter(
+                                    (def) => !existingIds.has(def.id)
+                                  );
+                                  return mancanti.length > 0 ? [...curr, ...mancanti] : curr;
+                                },
+                                {
+                                  campo: 'Ripristino catalogo EN 54',
+                                  prevVal: `${anagraficaLista.length} voci`,
+                                  newVal: 'Integrato catalogo predefinito EN 54',
+                                }
+                              )
+                            }
+                            className="rounded border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            Integra Catalogo EN 54 Predefinito
+                          </button>
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-6">
+                          <input
+                            type="text"
+                            value={nuovoCompCodice}
+                            onChange={(e) => setNuovoCompCodice(e.target.value)}
+                            placeholder="Codice (es. IRAI-OTT-220)"
+                            className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-900"
+                          />
+                          <input
+                            type="text"
+                            value={nuovoCompCostruttore}
+                            onChange={(e) => setNuovoCompCostruttore(e.target.value)}
+                            placeholder="Costruttore"
+                            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                          />
+                          <input
+                            type="text"
+                            value={nuovoCompModello}
+                            onChange={(e) => setNuovoCompModello(e.target.value)}
+                            placeholder="Modello (es. NFXI-OPT)"
+                            className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-900"
+                          />
+                          <select
+                            value={nuovoCompTipo}
+                            onChange={(e) => {
+                              const t = e.target.value as DispositivoIRAI['tipo'];
+                              const p = PRESET_DISPOSITIVI_IRAI[t];
+                              setNuovoCompTipo(t);
+                              setNuovoCompIq(p.iqMa);
+                              setNuovoCompIa(p.iaMa);
+                            }}
+                            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                          >
+                            <option value="rivelatore_ottico">Rivelatore ottico</option>
+                            <option value="rivelatore_termico">Rivelatore termico</option>
+                            <option value="pulsante_manuale">Pulsante manuale</option>
+                            <option value="targa_ottico_acustica">Targa ottico-acustica</option>
+                            <option value="modulo_uscita">Modulo di uscita</option>
+                            <option value="modulo_ingresso">Modulo di ingresso</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={nuovoCompNorma}
+                            onChange={(e) => setNuovoCompNorma(e.target.value)}
+                            placeholder="Norma (es. EN 54-7)"
+                            className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-900"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              step={0.05}
+                              min={0}
+                              value={nuovoCompIq}
+                              onChange={(e) => setNuovoCompIq(Number(e.target.value) || 0)}
+                              title="Corrente Quiete (mA)"
+                              placeholder="Iq mA"
+                              className="w-1/2 rounded border border-slate-300 bg-white px-1.5 py-1 font-mono text-xs text-slate-900"
+                            />
+                            <input
+                              type="number"
+                              step={0.1}
+                              min={0}
+                              value={nuovoCompIa}
+                              onChange={(e) => setNuovoCompIa(Number(e.target.value) || 0)}
+                              title="Corrente Allarme (mA)"
+                              placeholder="Ia mA"
+                              className="w-1/2 rounded border border-slate-300 bg-white px-1.5 py-1 font-mono text-xs text-slate-900"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="text"
+                            value={nuovoCompDescrizione}
+                            onChange={(e) => setNuovoCompDescrizione(e.target.value)}
+                            placeholder="Descrizione tecnica componente (es. Rivelatore ottico di fumo con isolatore integrato)"
+                            className="flex-1 min-w-[240px] rounded border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-900"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const preset = PRESET_DISPOSITIVI_IRAI[nuovoCompTipo];
+                              const nextIdx = anagraficaLista.length + 1;
+                              const nuovo: ComponenteAnagraficaIRAI = {
+                                id: `irai-anag-${Date.now()}`,
+                                codice:
+                                  nuovoCompCodice.trim() ||
+                                  `IRAI-${preset.prefisso}-${String(nextIdx).padStart(3, '0')}`,
+                                costruttore: nuovoCompCostruttore.trim() || 'Costruttore EN 54',
+                                modello:
+                                  nuovoCompModello.trim() || `${preset.prefisso}-STD-${nextIdx}`,
+                                tipo: nuovoCompTipo,
+                                descrizione:
+                                  nuovoCompDescrizione.trim() || preset.descrizioneDefault,
+                                correnteQuieteMa: Math.max(0, nuovoCompIq),
+                                correnteAllarmeMa: Math.max(0, nuovoCompIa),
+                                normaRiferimento: nuovoCompNorma.trim() || 'EN 54',
+                                simboloCodice: preset.simbolo,
+                              };
+                              aggiornaAnagrafica(
+                                (curr) => [...curr, nuovo],
+                                {
+                                  campo: 'Aggiunta componente in anagrafica',
+                                  prevVal: `${anagraficaLista.length} componenti`,
+                                  newVal: `${nuovo.codice} (${nuovo.modello})`,
+                                }
+                              );
+                              setNuovoCompCodice('');
+                              setNuovoCompModello('');
+                              setNuovoCompDescrizione('');
+                            }}
+                            className="inline-flex items-center gap-1 rounded bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 cursor-pointer"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                            Aggiungi a Anagrafica
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Tabella 1: Anagrafica Articoli e Modelli IRAI */}
+                      <div className="space-y-1.5">
+                        <div className="text-xs font-semibold text-slate-800">
+                          Catalogo Anagrafica Componenti di Sistema ({anagraficaLista.length} articoli)
+                        </div>
+                        <div className="overflow-x-auto rounded border border-slate-200">
+                          <table className="w-full text-left text-xs">
+                            <thead className="border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
+                              <tr>
+                                <th className="px-2.5 py-2">Simb.</th>
+                                <th className="px-2.5 py-2">Codice</th>
+                                <th className="px-2.5 py-2">Costruttore</th>
+                                <th className="px-2.5 py-2">Modello</th>
+                                <th className="px-2.5 py-2">Tipologia</th>
+                                <th className="px-2.5 py-2">Norma</th>
+                                <th className="px-2.5 py-2">Iq (mA)</th>
+                                <th className="px-2.5 py-2">Ia (mA)</th>
+                                <th className="px-2.5 py-2">Descrizione</th>
+                                <th className="px-2.5 py-2">Q.tà Loop</th>
+                                <th className="px-2.5 py-2 text-right">Azioni</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {anagraficaLista.map((item) => {
+                                const qtaSuLoop = sysIraiAttivo.loop.reduce(
+                                  (acc, l) =>
+                                    acc +
+                                    l.dispositivi
+                                      .filter(
+                                        (d) =>
+                                          d.anagraficaComponenteId === item.id ||
+                                          d.codiceArticolo === item.codice
+                                      )
+                                      .reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0),
+                                  0
+                                );
+                                return (
+                                  <tr key={item.id} className="hover:bg-slate-50">
+                                    <td className="px-2.5 py-1.5">
+                                      <SymbolSvg codice={item.simboloCodice} size={22} />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <input
+                                        type="text"
+                                        value={item.codice}
+                                        onChange={(e) =>
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? { ...c, codice: e.target.value }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="w-28 rounded border border-slate-200 px-1.5 py-0.5 font-mono font-semibold text-slate-900"
+                                      />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <input
+                                        type="text"
+                                        value={item.costruttore}
+                                        onChange={(e) =>
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? { ...c, costruttore: e.target.value }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="w-28 rounded border border-slate-200 px-1.5 py-0.5 text-slate-800"
+                                      />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <input
+                                        type="text"
+                                        value={item.modello}
+                                        onChange={(e) =>
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? { ...c, modello: e.target.value }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="w-28 rounded border border-slate-200 px-1.5 py-0.5 font-mono text-slate-900"
+                                      />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <select
+                                        value={item.tipo}
+                                        onChange={(e) => {
+                                          const t = e.target.value as DispositivoIRAI['tipo'];
+                                          const preset = PRESET_DISPOSITIVI_IRAI[t];
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? { ...c, tipo: t, simboloCodice: preset.simbolo }
+                                                : c
+                                            )
+                                          );
+                                        }}
+                                        className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-slate-800"
+                                      >
+                                        <option value="rivelatore_ottico">Rivelatore ottico</option>
+                                        <option value="rivelatore_termico">Rivelatore termico</option>
+                                        <option value="pulsante_manuale">Pulsante manuale</option>
+                                        <option value="targa_ottico_acustica">Targa ottico-acustica</option>
+                                        <option value="modulo_uscita">Modulo uscita</option>
+                                        <option value="modulo_ingresso">Modulo ingresso</option>
+                                      </select>
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <input
+                                        type="text"
+                                        value={item.normaRiferimento}
+                                        onChange={(e) =>
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? { ...c, normaRiferimento: e.target.value }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="w-24 rounded border border-slate-200 px-1.5 py-0.5 font-mono text-slate-700"
+                                      />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <input
+                                        type="number"
+                                        step={0.05}
+                                        min={0}
+                                        value={item.correnteQuieteMa}
+                                        onChange={(e) =>
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? {
+                                                    ...c,
+                                                    correnteQuieteMa:
+                                                      Number(e.target.value) || 0,
+                                                  }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="w-14 rounded border border-slate-200 px-1 py-0.5 font-mono text-slate-900"
+                                      />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <input
+                                        type="number"
+                                        step={0.1}
+                                        min={0}
+                                        value={item.correnteAllarmeMa}
+                                        onChange={(e) =>
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? {
+                                                    ...c,
+                                                    correnteAllarmeMa:
+                                                      Number(e.target.value) || 0,
+                                                  }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="w-14 rounded border border-slate-200 px-1 py-0.5 font-mono text-slate-900"
+                                      />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <input
+                                        type="text"
+                                        value={item.descrizione}
+                                        onChange={(e) =>
+                                          aggiornaAnagrafica((curr) =>
+                                            curr.map((c) =>
+                                              c.id === item.id
+                                                ? { ...c, descrizione: e.target.value }
+                                                : c
+                                            )
+                                          )
+                                        }
+                                        className="w-48 rounded border border-slate-200 px-1.5 py-0.5 text-slate-900"
+                                      />
+                                    </td>
+                                    <td className="px-2.5 py-1.5 font-mono font-semibold text-blue-800 tabular-nums">
+                                      {qtaSuLoop} pz
+                                    </td>
+                                    <td className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                                      {qtaSuLoop > 0 && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            onAggiornaProgetto(
+                                              (p) => ({
+                                                ...p,
+                                                sistemiIrai: p.sistemiIrai.map((sys) =>
+                                                  sys.id === sysIraiAttivo.id
+                                                    ? {
+                                                        ...sys,
+                                                        loop: sys.loop.map((l) => ({
+                                                          ...l,
+                                                          dispositivi: l.dispositivi.map((d) =>
+                                                            d.anagraficaComponenteId === item.id ||
+                                                            d.codiceArticolo === item.codice
+                                                              ? {
+                                                                  ...d,
+                                                                  tipo: item.tipo,
+                                                                  codiceArticolo: item.codice,
+                                                                  costruttore: item.costruttore,
+                                                                  modello: item.modello,
+                                                                  correnteQuieteMa:
+                                                                    item.correnteQuieteMa,
+                                                                  correnteAllarmeMa:
+                                                                    item.correnteAllarmeMa,
+                                                                  simboloCodice: item.simboloCodice,
+                                                                }
+                                                              : d
+                                                          ),
+                                                        })),
+                                                      }
+                                                    : sys
+                                                ),
+                                              }),
+                                              {
+                                                sezione: `${sysIraiAttivo.sigla} · Anagrafica`,
+                                                campo: 'Sincronizzazione su loop',
+                                                prevVal: item.codice,
+                                                newVal: `Aggiornati dati tecnici (${qtaSuLoop} pz)`,
+                                              }
+                                            )
+                                          }
+                                          title="Applica assorbimenti e modello ai dispositivi associati sui loop"
+                                          className="mr-1 rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-800 hover:bg-blue-100 cursor-pointer"
+                                        >
+                                          Sincronizza
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          aggiornaAnagrafica(
+                                            (curr) => curr.filter((c) => c.id !== item.id),
+                                            {
+                                              campo: 'Rimozione da anagrafica',
+                                              prevVal: `${item.codice} (${item.modello})`,
+                                              newVal: 'Eliminato',
+                                            }
+                                          )
+                                        }
+                                        title="Elimina componente dall'anagrafica"
+                                        className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-700 cursor-pointer"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* Tabella 2: Riepilogo Distinta Componenti Installati sui Loop */}
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span className="font-semibold text-slate-800">
+                            Distinta Riepilogativa Componenti Installati sui Loop ({totPzDistinta} dispositivi totali)
+                          </span>
+                          <span className="font-mono text-slate-600">
+                            Iq campo: {totIqDistinta.toFixed(2)} mA · Ia campo: {totIaDistinta.toFixed(1)} mA
+                          </span>
+                        </div>
+                        <div className="overflow-x-auto rounded border border-slate-200">
+                          <table className="w-full text-left text-xs">
+                            <thead className="border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
+                              <tr>
+                                <th className="px-2.5 py-2">Simb.</th>
+                                <th className="px-2.5 py-2">Codice / Modello</th>
+                                <th className="px-2.5 py-2">Tipologia</th>
+                                <th className="px-2.5 py-2">Loop di impiego</th>
+                                <th className="px-2.5 py-2">Zone</th>
+                                <th className="px-2.5 py-2 text-right">Q.tà Totale</th>
+                                <th className="px-2.5 py-2 text-right">Iq Tot (mA)</th>
+                                <th className="px-2.5 py-2 text-right">Ia Tot (mA)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {distintaInstallati.length === 0 ? (
+                                <tr>
+                                  <td
+                                    colSpan={8}
+                                    className="px-3 py-4 text-center text-slate-500"
+                                  >
+                                    Nessun componente ancora installato sui loop di {sysIraiAttivo.sigla}.
+                                  </td>
+                                </tr>
+                              ) : (
+                                distintaInstallati.map((row) => (
+                                  <tr key={row.chiave} className="hover:bg-slate-50">
+                                    <td className="px-2.5 py-1.5">
+                                      <SymbolSvg codice={row.simboloCodice} size={20} />
+                                    </td>
+                                    <td className="px-2.5 py-1.5">
+                                      <div className="font-mono font-semibold text-slate-900">
+                                        {row.codice} · {row.modello}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500">
+                                        {row.costruttore}
+                                      </div>
+                                    </td>
+                                    <td className="px-2.5 py-1.5 text-slate-700">
+                                      {PRESET_DISPOSITIVI_IRAI[row.tipo].label}
+                                    </td>
+                                    <td className="px-2.5 py-1.5 font-mono text-slate-700">
+                                      {Array.from(row.loops).join(', ')}
+                                    </td>
+                                    <td className="px-2.5 py-1.5 font-mono text-slate-700">
+                                      {Array.from(row.zone).join(', ')}
+                                    </td>
+                                    <td className="px-2.5 py-1.5 text-right font-mono font-semibold text-blue-800">
+                                      {row.quantitaTot} pz
+                                    </td>
+                                    <td className="px-2.5 py-1.5 text-right font-mono text-slate-800">
+                                      {row.iqTotMa.toFixed(2)}
+                                    </td>
+                                    <td className="px-2.5 py-1.5 text-right font-mono text-slate-800">
+                                      {row.iaTotMa.toFixed(1)}
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {iraiSubTab === 'loop' && (
                   <div className="space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-3.5 py-2.5">
@@ -1962,30 +2673,57 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                     </div>
 
                     {sysIraiAttivo.loop.map((lp, lpIndex) => {
+                      const anagraficaLista =
+                        sysIraiAttivo.anagraficaComponenti ?? ANAGRAFICA_COMPONENTI_IRAI_DEFAULT;
                       const lpRes = calcolo.irai[sysIraiAttivo.id]?.loopRisultati.find(
                         (r) => r.loopId === lp.id
                       );
+                      const anagraficaSelId = nuovoDispAnagraficaPerLoop[lp.id] ?? '';
+                      const componenteAnagraficaSel = anagraficaLista.find(
+                        (a) => a.id === anagraficaSelId
+                      );
                       const tipoSelezionato: DispositivoIRAI['tipo'] =
-                        nuovoDispTipoPerLoop[lp.id] ?? 'rivelatore_ottico';
+                        componenteAnagraficaSel?.tipo ??
+                        nuovoDispTipoPerLoop[lp.id] ??
+                        'rivelatore_ottico';
                       const zonaSelezionata: string =
                         nuovoDispZonaPerLoop[lp.id] ??
                         sysIraiAttivo.zone[0]?.id ??
                         'z-1';
+                      const quantitaNuovoDisp: number = Math.max(
+                        1,
+                        Math.min(
+                          lp.maxDispositiviConsentiti,
+                          Math.round(nuovoDispQuantitaPerLoop[lp.id] ?? 1)
+                        )
+                      );
 
                       const aggiungiComponenteAlLoop = () => {
                         const preset = PRESET_DISPOSITIVI_IRAI[tipoSelezionato];
                         const nextInd =
-                          lp.dispositivi.reduce((m, d) => Math.max(m, d.indirizzo), 0) + 1;
+                          lp.dispositivi.reduce(
+                            (m, d) => Math.max(m, d.indirizzo + Math.max(1, d.quantita ?? 1) - 1),
+                            0
+                          ) + 1;
                         const nuovoDisp: DispositivoIRAI = {
                           id: `disp-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
                           indirizzo: nextInd,
                           sigla: `${preset.prefisso}${lpIndex + 1}.${String(nextInd).padStart(2, '0')}`,
                           tipo: tipoSelezionato,
                           zonaId: zonaSelezionata,
-                          descrizione: preset.descrizioneDefault,
-                          correnteQuieteMa: preset.iqMa,
-                          correnteAllarmeMa: preset.iaMa,
-                          simboloCodice: preset.simbolo,
+                          descrizione:
+                            componenteAnagraficaSel?.descrizione ?? preset.descrizioneDefault,
+                          quantita: quantitaNuovoDisp,
+                          anagraficaComponenteId: componenteAnagraficaSel?.id,
+                          codiceArticolo: componenteAnagraficaSel?.codice,
+                          costruttore: componenteAnagraficaSel?.costruttore,
+                          modello: componenteAnagraficaSel?.modello,
+                          correnteQuieteMa:
+                            componenteAnagraficaSel?.correnteQuieteMa ?? preset.iqMa,
+                          correnteAllarmeMa:
+                            componenteAnagraficaSel?.correnteAllarmeMa ?? preset.iaMa,
+                          simboloCodice:
+                            componenteAnagraficaSel?.simboloCodice ?? preset.simbolo,
                         };
                         onAggiornaProgetto(
                           (p) => ({
@@ -2007,7 +2745,11 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                             sezione: `${sysIraiAttivo.sigla} · ${lp.sigla}`,
                             campo: 'Aggiunta componente',
                             prevVal: '—',
-                            newVal: `${nuovoDisp.sigla} (${preset.label})`,
+                            newVal: `${nuovoDisp.sigla} ×${quantitaNuovoDisp} (${
+                              componenteAnagraficaSel
+                                ? `${componenteAnagraficaSel.codice} ${componenteAnagraficaSel.modello}`
+                                : preset.label
+                            })`,
                           }
                         );
                       };
@@ -2145,8 +2887,8 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                                     {
                                       sezione: sysIraiAttivo.sigla,
                                       campo: 'Duplicazione Loop',
-                                      prevVal: `${lp.sigla} (${lp.dispositivi.length} disp)`,
-                                      newVal: `${loopClonato.sigla} (${loopClonato.dispositivi.length} disp)`,
+                                      prevVal: `${lp.sigla} (${lp.dispositivi.reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0)} disp)`,
+                                      newVal: `${loopClonato.sigla} (${loopClonato.dispositivi.reduce((s, d) => s + Math.max(1, d.quantita ?? 1), 0)} disp)`,
                                     }
                                   );
                                 }}
@@ -2204,15 +2946,21 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                                     <th className="py-1.5 pr-2">Tipo Componente</th>
                                     <th className="py-1.5 pr-2">Zona</th>
                                     <th className="py-1.5 pr-2">Descrizione</th>
+                                    <th className="py-1.5 pr-2">Q.tà</th>
                                     <th className="py-1.5 pr-2">Iq (mA)</th>
                                     <th className="py-1.5 pr-2">Ia (mA)</th>
                                     <th className="py-1.5 text-right">Azioni</th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                  {lp.dispositivi.map((d) => (
+                                  {lp.dispositivi.map((d) => {
+                                    const qta = Math.max(1, d.quantita ?? 1);
+                                    const indFine = d.indirizzo + qta - 1;
+                                    return (
                                     <tr key={d.id} className="hover:bg-slate-50">
-                                      <td className="py-1.5 pr-2 font-mono">{d.indirizzo}</td>
+                                      <td className="py-1.5 pr-2 font-mono whitespace-nowrap">
+                                        {qta > 1 ? `${d.indirizzo}÷${indFine}` : d.indirizzo}
+                                      </td>
                                       <td className="py-1.5 pr-2">
                                         <SymbolSvg codice={d.simboloCodice} size={22} />
                                       </td>
@@ -2328,9 +3076,62 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                                           }
                                           className="w-48 rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-900"
                                         />
+                                        {(d.codiceArticolo || d.modello) && (
+                                          <div className="mt-0.5 font-mono text-[10px] text-slate-500">
+                                            {[d.codiceArticolo, d.modello].filter(Boolean).join(' · ')}
+                                          </div>
+                                        )}
                                       </td>
-                                      <td className="py-1.5 pr-2 font-mono">{d.correnteQuieteMa}</td>
-                                      <td className="py-1.5 pr-2 font-mono">{d.correnteAllarmeMa}</td>
+                                      <td className="py-1.5 pr-2">
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          max={lp.maxDispositiviConsentiti}
+                                          value={qta}
+                                          onChange={(e) => {
+                                            const val = Math.max(
+                                              1,
+                                              Math.min(
+                                                lp.maxDispositiviConsentiti,
+                                                Math.round(Number(e.target.value) || 1)
+                                              )
+                                            );
+                                            onAggiornaProgetto((p) => ({
+                                              ...p,
+                                              sistemiIrai: p.sistemiIrai.map((sys) =>
+                                                sys.id === sysIraiAttivo.id
+                                                  ? {
+                                                      ...sys,
+                                                      loop: sys.loop.map((l) =>
+                                                        l.id === lp.id
+                                                          ? {
+                                                              ...l,
+                                                              dispositivi: l.dispositivi.map((dev) =>
+                                                                dev.id === d.id
+                                                                  ? { ...dev, quantita: val }
+                                                                  : dev
+                                                              ),
+                                                            }
+                                                          : l
+                                                      ),
+                                                    }
+                                                  : sys
+                                              ),
+                                            }));
+                                          }}
+                                          className="w-14 rounded border border-slate-200 px-1.5 py-0.5 font-mono text-xs text-slate-900"
+                                        />
+                                      </td>
+                                      <td className="py-1.5 pr-2 font-mono whitespace-nowrap">
+                                        {qta > 1
+                                          ? `${(d.correnteQuieteMa * qta).toFixed(2)} (${d.correnteQuieteMa})`
+                                          : d.correnteQuieteMa}
+                                      </td>
+                                      <td className="py-1.5 pr-2 font-mono whitespace-nowrap">
+                                        {qta > 1
+                                          ? `${(d.correnteAllarmeMa * qta).toFixed(1)} (${d.correnteAllarmeMa})`
+                                          : d.correnteAllarmeMa}
+                                      </td>
                                       <td className="py-1.5 text-right">
                                         <button
                                           type="button"
@@ -2363,34 +3164,62 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                                         </button>
                                       </td>
                                     </tr>
-                                  ))}
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             )}
                           </div>
 
-                          {/* Barra di aggiunta componente con scelta tipo e zona */}
+                          {/* Barra di aggiunta componente con scelta da anagrafica/tipo, zona e quantità */}
                           <div className="flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs">
                             <span className="font-medium text-slate-700">
                               Aggiungi componente:
                             </span>
                             <select
-                              value={tipoSelezionato}
-                              onChange={(e) =>
-                                setNuovoDispTipoPerLoop((prev) => ({
+                              value={anagraficaSelId}
+                              onChange={(e) => {
+                                const idSel = e.target.value;
+                                setNuovoDispAnagraficaPerLoop((prev) => ({
                                   ...prev,
-                                  [lp.id]: e.target.value as DispositivoIRAI['tipo'],
-                                }))
-                              }
-                              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                                  [lp.id]: idSel,
+                                }));
+                                const found = anagraficaLista.find((a) => a.id === idSel);
+                                if (found) {
+                                  setNuovoDispTipoPerLoop((prev) => ({
+                                    ...prev,
+                                    [lp.id]: found.tipo,
+                                  }));
+                                }
+                              }}
+                              className="max-w-[230px] rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
                             >
-                              <option value="rivelatore_ottico">Rivelatore ottico (0.35 / 5.5 mA)</option>
-                              <option value="rivelatore_termico">Rivelatore termico (0.35 / 5.5 mA)</option>
-                              <option value="pulsante_manuale">Pulsante manuale (0.30 / 6.0 mA)</option>
-                              <option value="targa_ottico_acustica">Targa ottico-acustica (0.80 / 45.0 mA)</option>
-                              <option value="modulo_uscita">Modulo di uscita (0.50 / 12.0 mA)</option>
-                              <option value="modulo_ingresso">Modulo di ingresso (0.40 / 5.0 mA)</option>
+                              <option value="">-- Tipologia standard --</option>
+                              {anagraficaLista.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  [{item.codice}] {item.modello} ({item.correnteQuieteMa}/{item.correnteAllarmeMa} mA)
+                                </option>
+                              ))}
                             </select>
+                            {!anagraficaSelId && (
+                              <select
+                                value={tipoSelezionato}
+                                onChange={(e) =>
+                                  setNuovoDispTipoPerLoop((prev) => ({
+                                    ...prev,
+                                    [lp.id]: e.target.value as DispositivoIRAI['tipo'],
+                                  }))
+                                }
+                                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                              >
+                                <option value="rivelatore_ottico">Rivelatore ottico (0.35 / 5.5 mA)</option>
+                                <option value="rivelatore_termico">Rivelatore termico (0.35 / 5.5 mA)</option>
+                                <option value="pulsante_manuale">Pulsante manuale (0.30 / 6.0 mA)</option>
+                                <option value="targa_ottico_acustica">Targa ottico-acustica (0.80 / 45.0 mA)</option>
+                                <option value="modulo_uscita">Modulo di uscita (0.50 / 12.0 mA)</option>
+                                <option value="modulo_ingresso">Modulo di ingresso (0.40 / 5.0 mA)</option>
+                              </select>
+                            )}
                             <select
                               value={zonaSelezionata}
                               onChange={(e) =>
@@ -2407,6 +3236,28 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                                 </option>
                               ))}
                             </select>
+                            <label className="inline-flex items-center gap-1 text-slate-700">
+                              <span>Q.tà:</span>
+                              <input
+                                type="number"
+                                min={1}
+                                max={lp.maxDispositiviConsentiti}
+                                value={quantitaNuovoDisp}
+                                onChange={(e) =>
+                                  setNuovoDispQuantitaPerLoop((prev) => ({
+                                    ...prev,
+                                    [lp.id]: Math.max(
+                                      1,
+                                      Math.min(
+                                        lp.maxDispositiviConsentiti,
+                                        Math.round(Number(e.target.value) || 1)
+                                      )
+                                    ),
+                                  }))
+                                }
+                                className="w-16 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-900"
+                              />
+                            </label>
                             <button
                               type="button"
                               onClick={aggiungiComponenteAlLoop}
@@ -2890,6 +3741,14 @@ export const DesignWorkspace: React.FC<DesignWorkspaceProps> = ({
                       />
                       Separazione circuiti potenza
                     </label>
+                    <button
+                      type="button"
+                      onClick={() => duplicaSistemaEvac(sysEvacAttivo.id)}
+                      className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer whitespace-nowrap"
+                    >
+                      <Copy className="h-3.5 w-3.5 text-blue-700" />
+                      Duplica Sistema
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
